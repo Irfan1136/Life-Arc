@@ -187,6 +187,7 @@ export default function LifeArc() {
   const [range, setRange] = useState("week");
   const [profOpen, setProfOpen] = useState(false);
   const [perm, setPerm] = useState("unknown");
+  const [ringNote, setRingNote] = useState("");
   const [edit, setEdit] = useState(false);
   const [newH, setNewH] = useState("");
   const [snoozes, setSnoozes] = useState([]);
@@ -285,6 +286,7 @@ export default function LifeArc() {
   // ring like a real alarm: loop tune (built-in or your own) + vibrate + keep screen awake
   useEffect(() => {
     if (!alert) return;
+    setRingNote("");
     const tn = alert.tune || "chime";
     const vib = () => { try { navigator.vibrate?.([500, 200, 500, 200, 500]); } catch { /* unsupported */ } };
     let t, dead = false, rm1, rm2;
@@ -294,7 +296,7 @@ export default function LifeArc() {
       // Android: ring on the ALARM volume, so it is heard even if media volume is 0
       vib(); t = setInterval(vib, 2500);
       window.__RP.play({ uri: rg?.uri || rawUri(TUNES.some((x) => x.id === tn) ? tn : "chime"), loop: true })
-        .catch(() => window.__RP.play({ uri: rawUri("chime"), loop: true }))
+        .catch(() => { if (rg) setRingNote("Your device sound couldn't play, so the default tune is ringing."); return window.__RP.play({ uri: rawUri("chime"), loop: true }); })
         .catch(() => { if (!dead) { clearInterval(t); synth(); } });
       const rm = () => window.__LN?.removeAllDeliveredNotifications().catch(() => {}); // stop the notification's own sound (no double ring)
       rm1 = setTimeout(rm, 300); rm2 = setTimeout(rm, 2000);
@@ -378,13 +380,14 @@ export default function LifeArc() {
   const vals = pts.map((p) => p.v).filter((v) => v != null);
   const consList = [...stats.cons[range]].sort((a, b) => a.p - b.p);
 
-  // last 7 days (used by Track, including Sleep)
-  const week = span(addDays(now, -6), 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }) }));
+  // this calendar week, Monday to Sunday (used by Track, including Sleep). Today is marked, future days are locked.
+  const wkStart = addDays(now, -((now.getDay() + 6) % 7));
+  const week = span(wkStart, 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }), today: dk(d) === today, future: dk(d) > today }));
 
   // tracks + monthly goals
   const curT = data.trackers.find((t) => t.id === trk) || data.trackers[0];
   const tVals = curT ? (curT.id === "sleep" ? data.sleep : data.tracks[curT.id]) || {} : {};
-  const tWeek = week.map((w) => ({ key: w.key, day: w.day, v: tVals[w.key] }));
+  const tWeek = week.map((w) => ({ key: w.key, day: w.day, today: w.today, future: w.future, v: tVals[w.key] }));
   const tLogged = tWeek.filter((w) => w.v != null);
   const tAvg = tLogged.length ? +(tLogged.reduce((t, w) => t + w.v, 0) / tLogged.length).toFixed(1) : 0;
   const tOk = (v) => (curT.mode === "max" ? v <= curT.target : v >= curT.target);
@@ -425,7 +428,8 @@ export default function LifeArc() {
     if (window.__RP) {
       const rg = data.rings.find((r) => `custom:${r.id}` === tn);
       window.__RP.play({ uri: rg?.uri || rawUri(TUNES.some((x) => x.id === tn) ? tn : "chime"), loop: false })
-        .then(() => setTimeout(() => window.__RP.stop().catch(() => {}), 6000)).catch(() => play("chime"));
+        .then(() => { setRingMsg(""); setTimeout(() => window.__RP.stop().catch(() => {}), 6000); })
+        .catch((e) => { if (rg) setRingMsg(`This device sound couldn't play (${e?.message || "no access"}). Tap Device sounds, allow audio access, then pick it again.`); else play("chime"); });
     } else play(tn);
   };
   const pickSys = async () => {
@@ -435,10 +439,10 @@ export default function LifeArc() {
       const id = ex ? ex.id : "s" + Date.now();
       if (!ex) {
         if (data.rings.length >= 10) return setRingMsg("Limit of 10 ringtones. Remove one first.");
-        setData((d) => ({ ...d, rings: [...d.rings, { id, name: r.title, uri: r.uri }] }));
+        setData((d) => ({ ...d, rings: [...d.rings, { id, name: /^\d+$/.test(r.title || "") ? `Device sound ${r.title.slice(-4)}` : r.title || "Device sound", uri: r.uri }] }));
       }
       setTune(`custom:${id}`); setRingMsg("");
-    } catch { /* cancelled */ }
+    } catch (e) { if (e?.message !== "cancelled") setRingMsg("Couldn't open the device sounds list. Allow audio access and try again."); }
   };
   const delRing = async (id) => {
     setData((d) => ({ ...d, rings: d.rings.filter((r) => r.id !== id), alarms: d.alarms.map((a) => (a.tune === `custom:${id}` ? { ...a, tune: "chime" } : a)) }));
@@ -455,7 +459,7 @@ export default function LifeArc() {
   const P = data.profile, age = ageOf(P.dob);
   const initials = P.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   const digits = P.phone.replace(/\D/g, "").length;
-  const phoneBad = P.phone && (/[^\d\s+-]/.test(P.phone) || digits < 7 || digits > 15);
+  const phoneBad = P.phone.replace(/\D/g, "").length > 0 && P.phone.replace(/\D/g, "").length !== 10;
   // Challenge: same periods as the Progress tab; my daily % for the days friends compare
   const periods = useMemo(() => ({
     today: [today],
@@ -574,7 +578,7 @@ export default function LifeArc() {
 
             <Card title="Performance" icon={TrendingUp}>
               <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-black p-1">
-                {[["week", "Week"], ["month", "Month"], ["season", "Season"]].map(([id, l]) => (
+                {[["week", "7 days"], ["month", "Month"], ["season", "Season"]].map(([id, l]) => (
                   <button key={id} onClick={() => setRange(id)} className={`rounded-lg py-2 text-sm font-medium ${range === id ? "bg-red-600 text-white" : "text-neutral-400"}`}>{l}</button>
                 ))}
               </div>
@@ -695,8 +699,8 @@ export default function LifeArc() {
                 </p>
                 <div className="mt-3 grid grid-cols-7 gap-1.5">
                   {tWeek.map((w) => (
-                    <label key={w.key} className="text-center text-[10px] text-neutral-500">{w.day}
-                      <input type="number" inputMode="decimal" step="0.5" min="0" placeholder="–" value={w.v ?? ""} onChange={(e) => setTV(w.key, e.target.value)} className="mt-1 w-full rounded-lg border border-neutral-700 bg-black py-2 text-center text-sm text-neutral-100 outline-none focus:border-red-500" />
+                    <label key={w.key} className={`text-center text-[10px] ${w.today ? "font-bold text-red-400" : "text-neutral-500"}`}>{w.today ? "Today" : w.day}
+                      <input type="number" inputMode="decimal" step="0.5" min="0" placeholder="–" value={w.v ?? ""} disabled={w.future} onChange={(e) => setTV(w.key, e.target.value)} className={`mt-1 w-full rounded-lg border bg-black py-2 text-center text-sm outline-none focus:border-red-500 disabled:opacity-30 ${w.today ? "border-red-500 text-white" : "border-neutral-700 text-neutral-100"}`} />
                     </label>
                   ))}
                 </div>
@@ -738,6 +742,11 @@ export default function LifeArc() {
               {tune.startsWith("custom:") && <button onClick={() => delRing(tune.slice(7))} aria-label="Remove ringtone" className="rounded-lg border border-neutral-700 px-3 text-neutral-400 hover:text-red-500"><Trash2 size={16} /></button>}
             </div>
             {ringMsg && <p className="mt-1 text-xs text-red-400">{ringMsg}</p>}
+            {tune.startsWith("custom:") && data.rings.some((r) => `custom:${r.id}` === tune) && (
+              <input value={data.rings.find((r) => `custom:${r.id}` === tune).name} maxLength={28} aria-label="Rename sound" placeholder="Name this sound"
+                onChange={(e) => setData((d) => ({ ...d, rings: d.rings.map((r) => (`custom:${r.id}` === tune ? { ...r, name: e.target.value } : r)) }))}
+                className="mt-2 w-full rounded-lg border border-neutral-700 bg-black px-3 py-2 text-sm outline-none focus:border-red-500" />
+            )}
             <div className="mt-3 flex items-center justify-between gap-1">
               {DAYN.map((d, i) => (
                 <button key={d} onClick={() => setDays((x) => (x.includes(i) ? x.filter((v) => v !== i) : [...x, i].sort()))} aria-pressed={days.includes(i)}
@@ -745,7 +754,7 @@ export default function LifeArc() {
               ))}
             </div>
             <p className="mt-1 text-center text-xs text-neutral-500">{days.length ? "Repeats on selected days" : "No day selected: repeats every day"}</p>
-            <button onClick={addAlarm} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 py-3 font-semibold text-white active:bg-red-500"><Plus size={18} /> Add and arm alarm</button>
+            <button onClick={addAlarm} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 py-3 font-semibold text-white active:bg-red-500"><Plus size={18} /> Add alarm</button>
             <ul className="mt-4 space-y-2">
               {data.alarms.length === 0 && <li className="text-sm text-neutral-500">No alarms yet.</li>}
               {[...data.alarms].sort((a, b) => a.time.localeCompare(b.time)).map((a) => (
@@ -802,9 +811,9 @@ export default function LifeArc() {
             </label>
             {P.dob && <p className="mt-1 text-sm text-red-400">{age != null ? `Age: ${age} years` : "Enter a valid date of birth"}</p>}
             <label className="mt-3 block text-xs text-neutral-400">Phone number
-              <input type="tel" inputMode="tel" value={P.phone} maxLength={18} placeholder="+91 98765 43210" onChange={(e) => setProf({ phone: e.target.value })} className={inp} />
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" value={P.phone.replace(/\D/g, "").slice(0, 10)} placeholder="10-digit mobile number" onChange={(e) => setProf({ phone: e.target.value.replace(/\D/g, "").slice(0, 10) })} className={inp} />
             </label>
-            {phoneBad && <p className="mt-1 text-xs text-red-400">Enter a valid phone number (7 to 15 digits).</p>}
+            {phoneBad && <p className="mt-1 text-xs text-red-400">Enter exactly 10 digits ({P.phone.replace(/\D/g, "").length} so far).</p>}
             <p className="mt-4 text-xs text-neutral-500">Saved only on this device. Nothing is uploaded.</p>
             <button onClick={() => setProfOpen(false)} className="mt-3 w-full rounded-xl bg-red-600 py-3 font-semibold text-white active:bg-red-500">Done</button>
           </div>
@@ -819,6 +828,7 @@ export default function LifeArc() {
             <BellRing size={48} className="mx-auto mb-4 text-red-500" />
             <p className="text-5xl font-black tabular-nums">{alert.time}</p>
             <p className="mt-2 text-lg text-neutral-200">{label(alert.habit)}</p>
+            {ringNote && <p className="mt-2 text-xs text-amber-400">{ringNote}</p>}
             <div className="mt-6 space-y-2">
               <button onClick={snooze} className="w-full rounded-xl bg-red-600 py-3 font-semibold text-white">Snooze 5 min</button>
               <div className="flex gap-2">

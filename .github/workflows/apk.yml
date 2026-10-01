@@ -20,7 +20,7 @@ jobs:
           mkdir -p android/app/src/main/java/com/teclipse/lifearc && cp native/*.java android/app/src/main/java/com/teclipse/lifearc/
           rm -rf android/app/src/main/res/mipmap-anydpi-v26
           for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do cp resources/icons/mipmap-$d/*.png android/app/src/main/res/mipmap-$d/; done
-          sed -i 's#android:allowBackup="true"#android:allowBackup="false"#; s#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/><uses-permission android:name="android.permission.USE_EXACT_ALARM"/><application android:usesCleartextTraffic="false"#' android/app/src/main/AndroidManifest.xml
+          sed -i 's#android:allowBackup="true"#android:allowBackup="false"#; s#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/><uses-permission android:name="android.permission.USE_EXACT_ALARM"/><uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/><application android:usesCleartextTraffic="false"#' android/app/src/main/AndroidManifest.xml
       - name: Version number (so a new APK installs over the old one)
         run: |
           sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName \"1.0\"/versionName \"1.${{ github.run_number }}\"/" android/app/build.gradle

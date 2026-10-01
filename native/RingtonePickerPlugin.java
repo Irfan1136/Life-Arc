@@ -13,15 +13,25 @@ import android.net.Uri;
 import android.os.Build;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
-@CapacitorPlugin(name = "RingtonePicker")
+@CapacitorPlugin(
+    name = "RingtonePicker",
+    permissions = {
+        @Permission(alias = "audio", strings = { "android.permission.READ_MEDIA_AUDIO" }),
+        @Permission(alias = "storage", strings = { "android.permission.READ_EXTERNAL_STORAGE" })
+    }
+)
 public class RingtonePickerPlugin extends Plugin {
     private MediaPlayer player;
+    private Ringtone fallback;
 
     private AudioAttributes alarmAttrs() {
         return new AudioAttributes.Builder()
@@ -30,8 +40,26 @@ public class RingtonePickerPlugin extends Plugin {
                 .build();
     }
 
+    private String audioAlias() {
+        return Build.VERSION.SDK_INT >= 33 ? "audio" : "storage";
+    }
+
+    // Reading the sound's name and playing songs from the phone needs audio access.
     @PluginMethod
     public void pick(PluginCall call) {
+        if (getPermissionState(audioAlias()) != PermissionState.GRANTED) {
+            requestPermissionForAlias(audioAlias(), call, "afterPermission");
+        } else {
+            launchPicker(call);
+        }
+    }
+
+    @PermissionCallback
+    private void afterPermission(PluginCall call) {
+        launchPicker(call);
+    }
+
+    private void launchPicker(PluginCall call) {
         Intent i = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
         i.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE,
                 RingtoneManager.TYPE_ALARM | RingtoneManager.TYPE_RINGTONE | RingtoneManager.TYPE_NOTIFICATION);
@@ -64,17 +92,35 @@ public class RingtonePickerPlugin extends Plugin {
     @PluginMethod
     public void play(PluginCall call) {
         stopPlayer();
+        String u = call.getString("uri");
+        if (u == null) {
+            call.reject("no sound selected");
+            return;
+        }
+        boolean loop = Boolean.TRUE.equals(call.getBoolean("loop", true));
+        Uri uri = Uri.parse(u);
         try {
             player = new MediaPlayer();
-            player.setDataSource(getContext(), Uri.parse(call.getString("uri")));
+            player.setDataSource(getContext(), uri);
             player.setAudioAttributes(alarmAttrs());
-            player.setLooping(call.getBoolean("loop", true));
+            player.setLooping(loop);
             player.prepare();
             player.start();
             call.resolve();
-        } catch (Exception e) {
+        } catch (Exception first) {
             stopPlayer();
-            call.reject("play failed");
+            try {
+                Ringtone r = RingtoneManager.getRingtone(getContext(), uri);
+                if (r == null) throw first;
+                r.setAudioAttributes(alarmAttrs());
+                if (Build.VERSION.SDK_INT >= 28) r.setLooping(loop);
+                r.play();
+                if (!r.isPlaying()) throw first;
+                fallback = r;
+                call.resolve();
+            } catch (Exception second) {
+                call.reject("no access to this sound: " + first.getMessage());
+            }
         }
     }
 
@@ -84,7 +130,7 @@ public class RingtonePickerPlugin extends Plugin {
         call.resolve();
     }
 
-    // Creates a notification channel whose sound is the chosen device sound.
+    // Creates a notification channel whose sound is the given sound.
     @PluginMethod
     public void channel(PluginCall call) {
         String id = call.getString("id");
@@ -105,6 +151,10 @@ public class RingtonePickerPlugin extends Plugin {
             try { player.stop(); } catch (Exception ignored) { }
             player.release();
             player = null;
+        }
+        if (fallback != null) {
+            try { fallback.stop(); } catch (Exception ignored) { }
+            fallback = null;
         }
     }
 }
