@@ -17,6 +17,8 @@ export function useChallenge({ name, payload }) {
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
   const [later, setLater] = useState([]);
+  const [again, setAgain] = useState(0);
+  const [pushErr, setPushErr] = useState("");
   const subs = useRef({});
 
   useEffect(() => {
@@ -38,16 +40,29 @@ export function useChallenge({ name, payload }) {
   useEffect(() => {
     if (st !== "ready") return;
     const want = new Set(links.filter((l) => l.status === "accepted").map((l) => other(l, me.uid).uid));
-    want.forEach((u) => { if (!subs.current[u]) subs.current[u] = S.watchProgress(u, (d) => setProg((p) => ({ ...p, [u]: d }))); });
+    want.forEach((u) => {
+      if (subs.current[u]) return;
+      subs.current[u] = S.watchProgress(
+        u,
+        (d) => setProg((p) => ({ ...p, [u]: d })),
+        // The listener dies on any error (often "permission-denied" right after accepting, before the server has the accept).
+        // Drop it and subscribe again a few seconds later, otherwise the friend's % never shows.
+        () => { delete subs.current[u]; setTimeout(() => setAgain((x) => x + 1), 4000); },
+      );
+    });
     Object.keys(subs.current).forEach((u) => {
       if (!want.has(u)) { subs.current[u](); delete subs.current[u]; setProg((p) => { const c = { ...p }; delete c[u]; return c; }); }
     });
-  }, [links, st]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [links, st, again]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // upload my daily percentages (a few seconds after any change)
   useEffect(() => {
-    if (st !== "ready" || !payload || !name) return;
-    const t = setTimeout(() => S.pushProgress({ name, code: me.code, ...payload }).catch(() => {}), 1500);
+    if (st !== "ready" || !payload) return;
+    let t;
+    const go = () => S.pushProgress({ name: name || "Friend", code: me.code, ...payload })
+      .then(() => setPushErr(""))
+      .catch((e) => { setPushErr(S.msg(e)); t = setTimeout(go, 15000); }); // never fail silently: show why and retry
+    t = setTimeout(go, 1500);
     return () => clearTimeout(t);
   }, [st, payload, name]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -68,7 +83,7 @@ export function useChallenge({ name, payload }) {
     try { return await fn(); } catch (e) { setMsg(S.msg(e)); return null; } finally { setBusy(false); }
   };
   return {
-    on, st, me, msg, busy, incoming, outgoing, friends, used,
+    on, st, me, msg, pushErr, busy, incoming, outgoing, friends, used,
     alertFor: incoming.find((l) => !later.includes(l.id)),
     dismiss: (id) => setLater((x) => [...x, id]),
     enable: () => { try { localStorage.setItem(FLAG, "1"); } catch { /* ignore */ } setOn(true); },
@@ -231,9 +246,11 @@ export function ChallengeTab({ ch, name, setName, periods, today, payload, seaso
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full rounded-full bg-red-500 transition-all duration-500" style={{ width: `${r.val ?? 0}%` }} /></div>
               {r.sync && <p className="mt-1 text-[10px] text-neutral-600">updated {r.sync}</p>}
+              {!r.you && r.val == null && <p className="mt-1 text-[10px] text-amber-500">No percentage yet. Ask {r.name} to open Life Arc once with internet (both phones need the latest app).</p>}
             </li>
           ))}
         </ul>
+        {ch.pushErr && <p className="mb-3 text-xs text-red-400">Your percentage could not be uploaded, so friends cannot see it. {ch.pushErr}</p>}
         {ch.friends.length === 0 && <p className="mt-3 text-sm text-neutral-500">No friends yet. Invite one to start comparing. You can begin with just 1 friend.</p>}
         <p className="mt-3 text-xs text-neutral-500">{caption} Days before someone started do not count; missed days count as 0%.</p>
       </Box>

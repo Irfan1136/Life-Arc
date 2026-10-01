@@ -24,7 +24,8 @@ const fail = (code) => Object.assign(new Error(code), { la: code });
 
 let db, auth, uid;
 
-export async function start(name) {
+// connect to Firebase and sign in (shared by Challenge and the phone backup)
+async function boot() {
   if (!configured()) throw fail("noconfig");
   if (!db) {
     const app = initializeApp(firebaseConfig);
@@ -34,6 +35,46 @@ export async function start(name) {
   let user = await new Promise((res) => { const un = onAuthStateChanged(auth, (u) => { un(); res(u); }); });
   if (!user) user = (await signInAnonymously(auth)).user;
   uid = user.uid;
+}
+
+// ---- phone + PIN backup: one document per (phone, PIN), found again after a reinstall ----
+export async function backupKey(phone, pin) {
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(String(pin)), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: enc.encode("lifearc:" + phone), iterations: 100000 }, base, 256);
+  return "b" + Array.from(new Uint8Array(bits), (x) => x.toString(16).padStart(2, "0")).join("");
+}
+export async function readBackup(key) {
+  await boot();
+  const s = await getDoc(doc(db, "backups", key));
+  return s.exists() ? s.data() : null;
+}
+export async function writeBackup(key, json) {
+  await boot();
+  await setDoc(doc(db, "backups", key), { json, updatedAt: serverTimestamp() });
+}
+// Auto backup save. The first save of each day first keeps the copy that was in the cloud as an "older copy"
+// (document id = key + "_prev", same collection and same fields, so firestore.rules needs no change).
+// That way a mistake you make today (deleted habits, wrong tap) can still be undone tomorrow.
+const dayStamp = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+export async function saveBackup(key, json) {
+  await boot();
+  let last = "";
+  try { last = localStorage.getItem("la:bkprev") || ""; } catch { /* ignore */ }
+  if (last !== dayStamp()) {
+    try {
+      const cur = await getDoc(doc(db, "backups", key));
+      if (cur.exists() && typeof cur.data().json === "string") {
+        await setDoc(doc(db, "backups", key + "_prev"), { json: cur.data().json, updatedAt: serverTimestamp() });
+      }
+      try { localStorage.setItem("la:bkprev", dayStamp()); } catch { /* ignore */ }
+    } catch { /* the older copy is a bonus: never block the main backup */ }
+  }
+  await setDoc(doc(db, "backups", key), { json, updatedAt: serverTimestamp() });
+}
+
+export async function start(name) {
+  await boot();
   const snap = await getDoc(doc(db, "users", uid));
   let code = snap.exists() ? snap.data().code : null;
   if (!code) {
@@ -64,8 +105,8 @@ export function watchLinks(cb) {
   const q = query(collection(db, "links"), where("members", "array-contains", uid));
   return onSnapshot(q, (s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data() })), null), (e) => cb(null, e));
 }
-export const watchProgress = (friendUid, cb) =>
-  onSnapshot(doc(db, "progress", friendUid), (s) => cb(s.exists() ? s.data() : null), () => cb(null));
+export const watchProgress = (friendUid, cb, onErr) =>
+  onSnapshot(doc(db, "progress", friendUid), (s) => cb(s.exists() ? s.data() : null), (e) => onErr?.(e));
 
 // type a friend's ID -> pending invite (or accepts at once if they already invited you)
 export async function invite(rawCode, me) {

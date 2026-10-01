@@ -4,6 +4,7 @@ import {
   Flame, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users,
 } from "lucide-react";
 import { useChallenge, ChallengeTab, InviteAlert } from "./Challenge.jsx";
+import * as S from "./social.js";
 import logo from "./logo.png";
 
 const KEY = "winterArc:v1";
@@ -50,6 +51,18 @@ const ageOf = (dob) => {
   return a >= 0 && a <= 120 ? a : null;
 };
 
+const BKKEY = "la:backup";
+const backupJson = (d) => JSON.stringify({ ...d, rings: [], v: 1 }); // ringtone files are local to the phone, so they are not backed up
+const BKHASH = "la:bkhash", BKAT = "la:bkat"; // fingerprint of the last copy saved to the cloud, and when
+const hashOf = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return `${h}:${s.length}`; };
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: "unavailable" }), ms))]);
+const ago = (t, nowD) => {
+  const m = Math.floor((+nowD - t) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  if (m < 1440) return `${Math.floor(m / 60)} h ago`;
+  return new Date(t).toLocaleDateString();
+};
 const pad = (n) => String(n).padStart(2, "0");
 const dk = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
@@ -200,6 +213,13 @@ export default function LifeArc() {
   const alarmsRef = useRef([]);
   const { unlock, play } = useChime();
   const [ringMsg, setRingMsg] = useState("");
+  const [viewDay, setViewDay] = useState(null); // null = today; otherwise a past day you are checking
+  const [bk, setBk] = useState(() => { try { return JSON.parse(localStorage.getItem(BKKEY)); } catch { return null; } });
+  const [bkPin, setBkPin] = useState("");
+  const [bkMsg, setBkMsg] = useState("");
+  const [bkBusy, setBkBusy] = useState(false);
+  const [bkAt, setBkAt] = useState(() => { try { return +localStorage.getItem(BKAT) || 0; } catch { return 0; } });
+  const [bkFail, setBkFail] = useState("");
 
   const today = dk(now);
   const H = data.habits, n = H.length;
@@ -313,10 +333,104 @@ export default function LifeArc() {
     return () => window.removeEventListener("wa-ring", h);
   }, []);
 
-  const todayScore = score(today);
-  const pct = pctOf(today);
+  const vd = viewDay && viewDay < today ? viewDay : today; // the day shown on the Today tab
+  const vScore = score(vd);
+  const vPct = pctOf(vd);
   const need = Math.ceil((n * WIN_PCT) / 100);
-  const toggle = (id) => setData((d) => ({ ...d, logs: { ...d.logs, [today]: { ...d.logs[today], [id]: !d.logs[today]?.[id] } } }));
+  const toggle = (id) => setData((d) => ({ ...d, logs: { ...d.logs, [vd]: { ...d.logs[vd], [id]: !d.logs[vd]?.[id] } } }));
+  const vdDate = new Date(vd + "T00:00:00");
+  const vdTitle = vd === today ? "Today's disciplines" : vd === dk(addDays(now, -1)) ? "Yesterday's disciplines" : `${DAYN[vdDate.getDay()]} ${vdDate.getDate()} ${vdDate.toLocaleDateString(undefined, { month: "short" })} disciplines`;
+  const recent = span(addDays(now, -13), 14).map(dk);
+
+  // phone + PIN backup
+  const phone10 = data.profile.phone.replace(/\D/g, "").slice(0, 10);
+  const saveBk = (v) => { try { if (v) localStorage.setItem(BKKEY, JSON.stringify(v)); else localStorage.removeItem(BKKEY); } catch { /* ignore */ } setBk(v); };
+  const bkCheck = () => {
+    if (phone10.length !== 10) { setBkMsg("Enter your 10-digit phone number above first."); return null; }
+    if (!/^\d{6}$/.test(bkPin)) { setBkMsg("Choose a 6-digit PIN."); return null; }
+    return true;
+  };
+  const markSent = (json) => {
+    try { localStorage.setItem(BKHASH, hashOf(json)); localStorage.setItem(BKAT, String(Date.now())); } catch { /* ignore */ }
+    setBkAt(Date.now()); setBkFail("");
+  };
+  const applyRestore = (jsonStr) => {
+    const restored = JSON.parse(jsonStr);
+    try { localStorage.setItem(KEY, JSON.stringify({ ...restored, rings: dataRef.current.rings })); } catch { /* ignore */ }
+    setData(load());
+  };
+  const bkTurnOn = async () => {
+    if (!bkCheck()) return;
+    setBkBusy(true); setBkMsg("");
+    try {
+      const key = await S.backupKey(phone10, bkPin);
+      if (await S.readBackup(key)) { setBkMsg("A backup already exists for this phone number and PIN. Tap Restore to get it back."); return; }
+      const json = backupJson(dataRef.current);
+      await withTimeout(S.writeBackup(key, json), 20000);
+      markSent(json);
+      saveBk({ key, phone: phone10 }); setBkPin(""); setBkMsg("Auto backup is on. Your data is saved to your phone number.");
+    } catch (e) { setBkMsg(S.msg(e)); } finally { setBkBusy(false); }
+  };
+  const bkRestore = async () => {
+    if (!bkCheck()) return;
+    setBkBusy(true); setBkMsg("");
+    try {
+      const key = await S.backupKey(phone10, bkPin);
+      const r = await S.readBackup(key);
+      if (!r) { setBkMsg("No backup found for this phone number and PIN. Check both and try again."); return; }
+      if (Object.keys(dataRef.current.logs).length > 0 && !window.confirm("Replace the data on this phone with your backup?")) return;
+      applyRestore(r.json);
+      saveBk({ key, phone: phone10 }); setBkAt(Date.now()); setBkPin(""); setBkMsg("Restored. Your data is back and auto backup is on.");
+    } catch (e) { setBkMsg(S.msg(e)); } finally { setBkBusy(false); }
+  };
+  // yesterday's copy: the cloud keeps the previous day's version, in case something was deleted by mistake today
+  const bkRestorePrev = async () => {
+    setBkBusy(true); setBkMsg("");
+    try {
+      const r = await S.readBackup(bk.key + "_prev");
+      if (!r) { setBkMsg("No older copy yet. One is kept from the second day of backup."); return; }
+      const when = r.updatedAt?.toDate?.().toLocaleString() || "an earlier day";
+      if (!window.confirm(`Replace the data on this phone with the older copy saved ${when}? Changes since then will be lost.`)) return;
+      applyRestore(r.json);
+      setBkMsg("Older copy restored.");
+    } catch (e) { setBkMsg(S.msg(e)); } finally { setBkBusy(false); }
+  };
+  // ---- auto backup engine ----
+  // Saves a few seconds after every change, when you leave the app, when the internet returns, and retries every 2 minutes.
+  // It remembers what the cloud already has, so nothing is sent twice and an unsent change survives closing the app.
+  const bkRef = useRef(bk); bkRef.current = bk;
+  const syncing = useRef(false);
+  const sync = async () => {
+    const b = bkRef.current;
+    if (!b?.key || syncing.current) return;
+    const json = backupJson(dataRef.current), h = hashOf(json);
+    let last = ""; try { last = localStorage.getItem(BKHASH) || ""; } catch { /* ignore */ }
+    if (h === last) return;
+    syncing.current = true;
+    let ok = false;
+    try { await withTimeout(S.saveBackup(b.key, json), 20000); markSent(json); ok = true; } catch (e) { setBkFail(S.msg(e)); } finally { syncing.current = false; }
+    if (ok && hashOf(backupJson(dataRef.current)) !== h) setTimeout(() => syncFn.current(), 1000); // changed while saving
+  };
+  const syncFn = useRef(sync); syncFn.current = sync;
+  const bkNow = async () => {
+    setBkBusy(true); setBkMsg("");
+    try { const json = backupJson(dataRef.current); await withTimeout(S.saveBackup(bk.key, json), 20000); markSent(json); setBkMsg("Saved."); } catch (e) { setBkMsg(S.msg(e)); } finally { setBkBusy(false); }
+  };
+  useEffect(() => {
+    if (!bk?.key) return;
+    const t = setTimeout(() => syncFn.current(), 3000);
+    return () => clearTimeout(t);
+  }, [data, bk]);
+  useEffect(() => {
+    if (!bk?.key) return;
+    const go = () => syncFn.current();
+    document.addEventListener("visibilitychange", go);
+    window.addEventListener("pagehide", go);
+    window.addEventListener("online", go);
+    const iv = setInterval(go, 120000);
+    go();
+    return () => { document.removeEventListener("visibilitychange", go); window.removeEventListener("pagehide", go); window.removeEventListener("online", go); clearInterval(iv); };
+  }, [bk]);
 
   // habit list editing
   const setH = (fn) => setData((d) => ({ ...d, habits: fn(d.habits) }));
@@ -513,23 +627,47 @@ export default function LifeArc() {
               {gItems.length > 0 && <p className="mt-1 text-sm text-neutral-200">Monthly goals: {gDone}/{gItems.length} achieved{gNext ? `. Next: ${gNext.text}` : ". All done."}</p>}
             </div>
 
-            <Card title="Today's disciplines" icon={Check} right={
+            {!bk && S.configured() && (
+              <button onClick={() => setProfOpen(true)} className="w-full rounded-2xl border border-red-500/60 bg-red-950/20 p-3 text-left text-sm text-neutral-200 active:bg-red-950/40">
+                {Object.keys(data.logs).length === 0
+                  ? <>Reinstalled the app? <span className="font-semibold text-red-400">Restore your data with your phone number</span></>
+                  : <>Auto backup is off. <span className="font-semibold text-red-400">Turn it on with your phone number</span> so a reinstall or lost phone never wipes your progress.</>}
+              </button>
+            )}
+
+            <Card title={vdTitle} icon={Check} right={
               <button onClick={() => setEdit(!edit)} className="flex items-center gap-1 rounded-lg border border-neutral-700 px-2 py-1 text-xs text-neutral-300 active:bg-neutral-800">
                 {edit ? <><Check size={14} /> Done</> : <><Pencil size={14} /> Edit list</>}
               </button>}>
               {!edit && (
+                <div ref={(el) => { if (el && !el.dataset.s) { el.scrollLeft = el.scrollWidth; el.dataset.s = "1"; } }} className="mb-3 flex gap-2 overflow-x-auto pb-1" aria-label="Pick a day">
+                  {recent.map((k) => {
+                    const d = new Date(k + "T00:00:00"), sel = k === vd;
+                    return (
+                      <button key={k} onClick={() => setViewDay(k === today ? null : k)} aria-pressed={sel}
+                        className={`flex w-14 shrink-0 flex-col items-center rounded-xl border py-1.5 ${sel ? "border-red-500 bg-red-600 text-white" : "border-neutral-700 text-neutral-300 active:bg-neutral-800"}`}>
+                        <span className="text-[10px] uppercase">{k === today ? "Today" : DAYN[d.getDay()]}</span>
+                        <span className="text-base font-bold leading-tight">{d.getDate()}</span>
+                        <span className={`text-[10px] ${sel ? "text-red-100" : "text-neutral-500"}`}>{data.logs[k] ? `${pctOf(k)}%` : "–"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {!edit && vd !== today && <p className="mb-3 text-xs text-amber-400">You are editing a past day. Tap Today to go back.</p>}
+              {!edit && (
                 <div className="mb-4">
                   <div className="mb-1 flex justify-between text-xs text-neutral-400">
-                    <span>{todayScore >= need ? "Day won" : `${need - todayScore} more to win the day`}</span>
-                    <span className="font-semibold text-red-500">{todayScore}/{n} · {pct}%</span>
+                    <span>{vScore >= need ? "Day won" : `${need - vScore} more to win the day`}</span>
+                    <span className="font-semibold text-red-500">{vScore}/{n} · {vPct}%</span>
                   </div>
-                  <Bar value={pct} className="bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.7)]" />
+                  <Bar value={vPct} className="bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.7)]" />
                 </div>
               )}
               <ul className="space-y-2">
                 {H.map((h, i) => {
                   const Icon = ICONS[h.id] || Flame;
-                  const on = !!data.logs[today]?.[h.id];
+                  const on = !!data.logs[vd]?.[h.id];
                   if (edit) return (
                     <li key={h.id} className="flex items-center gap-1.5">
                       <input value={h.label} maxLength={40} onChange={(e) => rename(h.id, e.target.value)}
@@ -798,7 +936,7 @@ export default function LifeArc() {
 
       {profOpen && (
         <div className="fixed inset-0 z-50 flex items-end bg-black/80" onClick={() => setProfOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} className="mx-auto w-full max-w-xl rounded-t-3xl border border-neutral-800 bg-neutral-950 p-5" style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom, 0px))" }}>
+          <div onClick={(e) => e.stopPropagation()} className="mx-auto max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-3xl border border-neutral-800 bg-neutral-950 p-5" style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom, 0px))" }}>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-lg font-bold"><User size={18} className="text-red-500" /> Your profile</h2>
               <button onClick={() => setProfOpen(false)} aria-label="Close profile" className="rounded-lg p-2 text-neutral-400 active:bg-neutral-800"><X size={18} /></button>
@@ -814,7 +952,33 @@ export default function LifeArc() {
               <input type="tel" inputMode="numeric" pattern="[0-9]*" value={P.phone.replace(/\D/g, "").slice(0, 10)} placeholder="10-digit mobile number" onChange={(e) => setProf({ phone: e.target.value.replace(/\D/g, "").slice(0, 10) })} className={inp} />
             </label>
             {phoneBad && <p className="mt-1 text-xs text-red-400">Enter exactly 10 digits ({P.phone.replace(/\D/g, "").length} so far).</p>}
-            <p className="mt-4 text-xs text-neutral-500">Saved only on this device. Nothing is uploaded.</p>
+            {S.configured() ? (
+              <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-900/60 p-3">
+                <p className="text-sm font-semibold text-neutral-200">Backup with your phone number</p>
+                {bk ? (
+                  <>
+                    <p className="mt-1 text-xs text-emerald-400">Auto backup is ON for {bk.phone}. {bkAt ? `Last saved ${ago(bkAt, now)}.` : "Saving..."} It saves a few seconds after every change and when you leave the app. After a reinstall, enter the same number and PIN and tap Restore.</p>
+                    {bkFail && <p className="mt-1 text-xs text-amber-400">Not saved yet: {bkFail} It will retry by itself.</p>}
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <button onClick={bkNow} disabled={bkBusy} className="rounded-xl border border-red-500 py-2 text-sm font-semibold text-red-400 disabled:opacity-50">Back up now</button>
+                      <button onClick={bkRestorePrev} disabled={bkBusy} className="rounded-xl border border-neutral-600 py-2 text-sm text-neutral-300 disabled:opacity-50">Older copy</button>
+                      <button onClick={() => window.confirm("Stop backing up on this phone? Your saved copy stays in the cloud.") && saveBk(null)} className="rounded-xl border border-neutral-600 py-2 text-sm text-neutral-300">Turn off</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-1 text-xs text-neutral-400">Uses the phone number above. No OTP. Choose a 6-digit PIN and remember it: you need the number and PIN to restore after reinstalling.</p>
+                    <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={6} value={bkPin} placeholder="6-digit PIN" onChange={(e) => setBkPin(e.target.value.replace(/\D/g, "").slice(0, 6))} className={inp} />
+                    <div className="mt-2 flex gap-2">
+                      <button onClick={bkTurnOn} disabled={bkBusy} className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-semibold text-white active:bg-red-500 disabled:opacity-50">Turn on backup</button>
+                      <button onClick={bkRestore} disabled={bkBusy} className="flex-1 rounded-xl border border-red-500 py-2.5 text-sm font-semibold text-red-400 disabled:opacity-50">Restore</button>
+                    </div>
+                  </>
+                )}
+                {bkBusy && <p className="mt-2 text-xs text-neutral-400">Please wait...</p>}
+                {bkMsg && <p className="mt-2 text-xs text-amber-400">{bkMsg}</p>}
+              </div>
+            ) : <p className="mt-4 text-xs text-neutral-500">Saved only on this device.</p>}
             <button onClick={() => setProfOpen(false)} className="mt-3 w-full rounded-xl bg-red-600 py-3 font-semibold text-white active:bg-red-500">Done</button>
           </div>
         </div>

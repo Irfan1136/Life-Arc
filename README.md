@@ -23,3 +23,13 @@ Every app start shows a full-screen black splash for 1 second: the cover image a
 7. Commit and push. GitHub builds the new APK.
 
 Friends see only daily percentages, only after they accept. Max 6 friends per person.
+
+## Auto backup (phone number + PIN, no OTP) and previous days
+- Profile (top-right circle) > "Backup with your phone number": enter the 10-digit phone, choose a 6-digit PIN, tap **Turn on backup**. Do this once. The Today tab shows a red reminder until it is on.
+- After that it is fully automatic: a few seconds after every change, whenever you leave or reopen the app, when the internet comes back, and every 2 minutes as a retry. A change made offline is kept and sent later, even if you close the app first.
+- Profile shows "Last saved ... ago". **Back up now** forces a save.
+- The first save of each day keeps the previous cloud copy as an **older copy**. If you delete something by mistake, open Profile > **Older copy** to go back to it.
+- After a reinstall: open Profile, enter the same phone and PIN, tap **Restore**.
+- Firestore rules: **no change needed** for auto backup or the older copy (they use the same `backups` section and fields). If you have never published the current `firestore.rules`, publish it once or backup shows "Firebase blocked this".
+- Today tab: tap any of the last 14 days to check or fix that day's habits.
+- Not backed up: custom ringtone files (local to the phone) and Challenge friends (a reinstall creates a new Challenge ID, so add friends again).
