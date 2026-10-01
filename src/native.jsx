@@ -1,0 +1,11 @@
+import { createRoot } from "react-dom/client";
+import { registerPlugin } from "@capacitor/core";
+import { LocalNotifications } from "@capacitor/local-notifications";
+import LifeArc from "./LifeArc.jsx";
+import Splash from "./Splash.jsx";
+window.__LN = LocalNotifications;
+window.__RP = registerPlugin("RingtonePicker");
+const ring = (n) => window.dispatchEvent(new CustomEvent("wa-ring", { detail: n?.extra }));
+LocalNotifications.addListener("localNotificationActionPerformed", (e) => ring(e.notification));
+LocalNotifications.addListener("localNotificationReceived", ring);
+createRoot(document.getElementById("root")).render(<><LifeArc /><Splash /></>);
