@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Moon, Brain, Dumbbell, Droplets, Apple, BookOpen, Smartphone, Snowflake, Pencil, ClipboardCheck,
-  Flame, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf,
+  Flame, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users,
 } from "lucide-react";
+import { useChallenge, ChallengeTab, InviteAlert } from "./Challenge.jsx";
 import logo from "./logo.png";
 
 const KEY = "winterArc:v1";
-const SLEEP_TARGET = 7;
 const WIN_PCT = 70; // a day is won at 70% of your habits
 const MONTH_GOAL = 0.8; // win 80% of the days in each month
 
@@ -30,7 +30,7 @@ const QUOTES = [
   "Discipline is a promise to yourself, kept quietly.",
   "Tired is temporary. Regret is not.",
 ];
-const TABS = [["today", "Today", Check], ["progress", "Progress", TrendingUp], ["sleep", "Sleep", Moon], ["track", "Track", Activity], ["alarms", "Alarms", Bell]];
+const TABS = [["today", "Today", Check], ["progress", "Progress", TrendingUp], ["track", "Track", Activity], ["challenge", "Challenge", Users], ["alarms", "Alarms", Bell]];
 const TUNES = [
   { id: "chime", name: "Soft chime" }, { id: "beep", name: "Digital beep" }, { id: "siren", name: "Siren" },
   { id: "rise", name: "Rising melody" }, { id: "pulse", name: "Pulse" },
@@ -57,24 +57,25 @@ const span = (s, c) => Array.from({ length: c }, (_, i) => addDays(s, i));
 const itemsOf = (g) => g?.items || (g?.text ? [{ id: "legacy", text: g.text, done: false }] : []);
 const mean = (a) => (a.length ? Math.round(a.reduce((s, v) => s + v, 0) / a.length) : 0);
 
+const SLEEP = { id: "sleep", name: "Sleep", unit: "h", target: 7, mode: "min" };
+const withSleep = (t) => (t.some((x) => x.id === "sleep") ? t : [SLEEP, ...t]);
+const okRings = (r) => (r || []).filter((x) => x.uri);
+const fixAlarm = (rings) => (a) => (a.tune?.startsWith("custom:") && !rings.some((x) => `custom:${x.id}` === a.tune) ? { ...a, tune: "chime" } : a);
 const SCREEN = { id: "screen", name: "Screen time", unit: "h", target: 3, mode: "max" };
 function load() {
   try {
     const r = JSON.parse(localStorage.getItem(KEY));
     return {
-      logs: r?.logs || {}, sleep: r?.sleep || {}, alarms: r?.alarms || [], habits: r?.habits?.length ? r.habits : DEFAULT_HABITS,
-      goals: r?.goals || {}, rings: r?.rings || [], profile: r?.profile || { name: "", dob: "", phone: "" },
-      trackers: Array.isArray(r?.trackers) ? r.trackers : [{ ...SCREEN, target: r?.screenLimit ?? 3 }],
+      logs: r?.logs || {}, sleep: r?.sleep || {}, alarms: (r?.alarms || []).map(fixAlarm(okRings(r?.rings))), habits: r?.habits?.length ? r.habits : DEFAULT_HABITS,
+      goals: r?.goals || {}, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
+      trackers: withSleep(Array.isArray(r?.trackers) ? r.trackers : [{ ...SCREEN, target: r?.screenLimit ?? 3 }]),
       tracks: r?.tracks || (r?.screen ? { screen: r.screen } : {}),
     };
-  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SCREEN], tracks: {} }; }
+  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {} }; }
 }
 
-// user ringtones live in IndexedDB (too big for localStorage)
-const idb = () => new Promise((res, rej) => { const r = indexedDB.open("winterArc", 1); r.onupgradeneeded = () => r.result.createObjectStore("rings"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
-const ringPut = async (id, v) => { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction("rings", "readwrite"); tx.objectStore("rings").put(v, id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); };
-const ringGet = async (id) => { const db = await idb(); return new Promise((res, rej) => { const q = db.transaction("rings").objectStore("rings").get(id); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); };
-const ringDel = async (id) => { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction("rings", "readwrite"); tx.objectStore("rings").delete(id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); };
+const PKG = "com.teclipse.lifearc";
+const rawUri = (n) => `android.resource://${PKG}/raw/${n}`;
 
 const TuneOptions = ({ rings }) => (
   <>
@@ -111,20 +112,7 @@ function useChime() {
     else if (tune === "pulse") [0, 0.4, 0.8, 1.2].forEach((t, i) => note(i % 2 ? 660 : 880, t, 0.35, "square", 0.22));
     else [660, 880, 1320].forEach((f, i) => note(f, i * 0.22, 0.4, "sine", 0.3));
   };
-  const el = useRef(null);
-  const stop = () => { if (el.current) { el.current.a.pause(); URL.revokeObjectURL(el.current.url); el.current = null; } };
-  const playCustom = async (id, loop = true) => {
-    stop();
-    try {
-      const v = await ringGet(id);
-      if (!v?.blob) return false;
-      const url = URL.createObjectURL(v.blob), a = new Audio(url);
-      a.loop = loop; el.current = { a, url };
-      await a.play();
-      return true;
-    } catch { return false; }
-  };
-  return { unlock, play, playCustom, stop };
+  return { unlock, play };
 }
 
 function LineChart({ points, max = 100, ticks = [0, 50, 100], target, tLabel = "target", unit = "h", showVals }) {
@@ -204,12 +192,12 @@ export default function LifeArc() {
   const [snoozes, setSnoozes] = useState([]);
   const [tune, setTune] = useState("chime");
   const [days, setDays] = useState([]);
-  const [trk, setTrk] = useState("screen");
+  const [trk, setTrk] = useState("sleep");
   const [addingT, setAddingT] = useState(false);
   const [nt, setNt] = useState({ name: "", unit: "h", target: "1", mode: "min" });
   const [gIn, setGIn] = useState({});
   const alarmsRef = useRef([]);
-  const { unlock, play, playCustom, stop } = useChime();
+  const { unlock, play } = useChime();
   const [ringMsg, setRingMsg] = useState("");
 
   const today = dk(now);
@@ -253,21 +241,22 @@ export default function LifeArc() {
       try {
         const perm = await LN.requestPermissions();
         if (perm.display !== "granted") return;
-        for (const t of TUNES) await LN.createChannel({ id: `alarm_${t.id}`, name: `Alarm: ${t.name}`, importance: 5, sound: `${t.id}.wav`, vibration: true, visibility: 1 });
+        for (const t of TUNES) { try { await LN.deleteChannel({ id: `alarm_${t.id}` }); } catch { /* none */ } }
         const pend = await LN.getPending();
         if (pend.notifications.length) await LN.cancel({ notifications: pend.notifications });
         const list = [];
         for (const a of data.alarms.filter((x) => x.armed)) {
           const [h, m] = a.time.split(":").map(Number);
           const rg = a.tune?.startsWith("custom:") ? dataRef.current.rings.find((r) => `custom:${r.id}` === a.tune) : null;
-          const tn = rg ? "chime" : a.tune || "chime";
-          let channelId = `alarm_${tn}`, sound = `${tn}.wav`;
-          if (rg?.uri && window.__RP) {
-            channelId = `alarm_sys_${[...rg.uri].reduce((x, c) => (x * 31 + c.charCodeAt(0)) | 0, 7).toString(36)}`;
-            sound = undefined;
-            await window.__RP.channel({ id: channelId, name: `Alarm: ${rg.name}`, uri: rg.uri });
+          const tn = TUNES.some((t) => t.id === a.tune) ? a.tune : "chime";
+          let channelId = `alarm2_${tn}`, name = `Alarm: ${TUNES.find((t) => t.id === tn).name}`, uri = rawUri(tn);
+          if (rg?.uri) { channelId = `alarm_sys_${[...rg.uri].reduce((x, c) => (x * 31 + c.charCodeAt(0)) | 0, 7).toString(36)}`; name = `Alarm: ${rg.name}`; uri = rg.uri; }
+          try { await window.__RP.channel({ id: channelId, name, uri }); }
+          catch {
+            channelId = "alarm2_chime";
+            try { await window.__RP.channel({ id: channelId, name: "Alarm: Chime", uri: rawUri("chime") }); } catch { /* default channel */ }
           }
-          const base = { title: "Life Arc", body: label(a.habit), channelId, sound, extra: { alarmId: a.id } };
+          const base = { title: "Life Arc", body: label(a.habit), channelId, sound: rg ? undefined : `${tn}.wav`, extra: { alarmId: a.id } };
           const slots = a.days?.length ? a.days.map((d) => ({ weekday: d + 1, hour: h, minute: m })) : [{ hour: h, minute: m }];
           slots.forEach((on, i) => list.push({ ...base, id: (a.id % 100000000) * 10 + i, schedule: { on, allowWhileIdle: true } }));
         }
@@ -296,21 +285,23 @@ export default function LifeArc() {
   // ring like a real alarm: loop tune (built-in or your own) + vibrate + keep screen awake
   useEffect(() => {
     if (!alert) return;
-    const tn = alert.tune || "chime", custom = tn.startsWith("custom:");
+    const tn = alert.tune || "chime";
     const vib = () => { try { navigator.vibrate?.([500, 200, 500, 200, 500]); } catch { /* unsupported */ } };
-    let t, dead = false;
-    const synth = () => { const r = () => { play(custom ? "chime" : tn); vib(); }; r(); t = setInterval(r, 2500); };
-    const rg = custom ? dataRef.current.rings.find((r) => `custom:${r.id}` === tn) : null;
-    if (rg?.uri && window.__RP) {
+    let t, dead = false, rm1, rm2;
+    const synth = () => { const r = () => { play(TUNES.some((x) => x.id === tn) ? tn : "chime"); vib(); }; r(); t = setInterval(r, 2500); };
+    const rg = tn.startsWith("custom:") ? dataRef.current.rings.find((r) => `custom:${r.id}` === tn) : null;
+    if (window.__RP) {
+      // Android: ring on the ALARM volume, so it is heard even if media volume is 0
       vib(); t = setInterval(vib, 2500);
-      window.__RP.play({ uri: rg.uri, loop: true }).catch(() => { if (!dead) { clearInterval(t); synth(); } });
-    } else if (custom) {
-      vib(); t = setInterval(vib, 2500);
-      playCustom(tn.slice(7)).then((ok) => { if (!ok && !dead) { clearInterval(t); synth(); } });
+      window.__RP.play({ uri: rg?.uri || rawUri(TUNES.some((x) => x.id === tn) ? tn : "chime"), loop: true })
+        .catch(() => window.__RP.play({ uri: rawUri("chime"), loop: true }))
+        .catch(() => { if (!dead) { clearInterval(t); synth(); } });
+      const rm = () => window.__LN?.removeAllDeliveredNotifications().catch(() => {}); // stop the notification's own sound (no double ring)
+      rm1 = setTimeout(rm, 300); rm2 = setTimeout(rm, 2000);
     } else synth();
     let lock;
     try { navigator.wakeLock?.request("screen").then((l) => (lock = l)).catch(() => {}); } catch { /* unsupported */ }
-    return () => { dead = true; clearInterval(t); stop(); window.__RP?.stop().catch(() => {}); try { lock?.release(); navigator.vibrate?.(0); } catch { /* ignore */ } };
+    return () => { dead = true; clearInterval(t); clearTimeout(rm1); clearTimeout(rm2); window.__RP?.stop().catch(() => {}); try { lock?.release(); navigator.vibrate?.(0); } catch { /* ignore */ } };
   }, [alert]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Android notification tap / delivery opens the ring screen
@@ -387,20 +378,12 @@ export default function LifeArc() {
   const vals = pts.map((p) => p.v).filter((v) => v != null);
   const consList = [...stats.cons[range]].sort((a, b) => a.p - b.p);
 
-  // sleep
-  const week = span(addDays(now, -6), 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }), hrs: data.sleep[dk(d)] }));
-  const logged = week.filter((w) => w.hrs != null);
-  const avg = logged.length ? (logged.reduce((s, w) => s + w.hrs, 0) / logged.length).toFixed(1) : "–";
-  const setSleep = (key, v) =>
-    setData((d) => {
-      const sleep = { ...d.sleep };
-      if (v === "" || isNaN(+v)) delete sleep[key]; else sleep[key] = Math.min(16, Math.max(0, +v));
-      return { ...d, sleep };
-    });
+  // last 7 days (used by Track, including Sleep)
+  const week = span(addDays(now, -6), 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }) }));
 
   // tracks + monthly goals
   const curT = data.trackers.find((t) => t.id === trk) || data.trackers[0];
-  const tVals = curT ? data.tracks[curT.id] || {} : {};
+  const tVals = curT ? (curT.id === "sleep" ? data.sleep : data.tracks[curT.id]) || {} : {};
   const tWeek = week.map((w) => ({ key: w.key, day: w.day, v: tVals[w.key] }));
   const tLogged = tWeek.filter((w) => w.v != null);
   const tAvg = tLogged.length ? +(tLogged.reduce((t, w) => t + w.v, 0) / tLogged.length).toFixed(1) : 0;
@@ -408,14 +391,14 @@ export default function LifeArc() {
   const tTop = Math.ceil(curT ? Math.max(curT.target * 1.4, ...tLogged.map((w) => w.v), 1) : 1);
   const setTV = (key, v) =>
     setData((d) => {
-      const cur = { ...(d.tracks[curT.id] || {}) };
-      if (v === "" || isNaN(+v)) delete cur[key]; else cur[key] = Math.min(999, Math.max(0, +v));
-      return { ...d, tracks: { ...d.tracks, [curT.id]: cur } };
+      const isS = curT.id === "sleep", cur = { ...((isS ? d.sleep : d.tracks[curT.id]) || {}) };
+      if (v === "" || isNaN(+v)) delete cur[key]; else cur[key] = Math.min(isS ? 16 : 999, Math.max(0, +v));
+      return isS ? { ...d, sleep: cur } : { ...d, tracks: { ...d.tracks, [curT.id]: cur } };
     });
   const patchT = (patch) => setData((d) => ({ ...d, trackers: d.trackers.map((t) => (t.id === curT.id ? { ...t, ...patch } : t)) }));
   const addTracker = () => {
     const name = nt.name.trim();
-    if (!name || data.trackers.length >= 8) return;
+    if (!name || data.trackers.length >= 9) return;
     const id = "t" + Date.now();
     setData((d) => ({ ...d, trackers: [...d.trackers, { id, name, unit: nt.unit.trim() || "h", target: Math.max(0, +nt.target || 0), mode: nt.mode }] }));
     setTrk(id); setAddingT(false); setNt({ name: "", unit: "h", target: "1", mode: "min" });
@@ -438,11 +421,12 @@ export default function LifeArc() {
   };
   const toggleAlarm = (id) => { unlock(); setData((d) => ({ ...d, alarms: d.alarms.map((a) => (a.id === id ? { ...a, armed: !a.armed, fired: null } : a)) })); };
   const previewT = (tn) => {
-    stop(); window.__RP?.stop().catch(() => {});
-    const rg = data.rings.find((r) => `custom:${r.id}` === tn);
-    if (rg?.uri && window.__RP) window.__RP.play({ uri: rg.uri, loop: false }).then(() => setTimeout(() => window.__RP.stop().catch(() => {}), 6000)).catch(() => {});
-    else if (tn.startsWith("custom:")) playCustom(tn.slice(7), false).then((ok) => ok && setTimeout(stop, 6000));
-    else play(tn);
+    window.__RP?.stop().catch(() => {});
+    if (window.__RP) {
+      const rg = data.rings.find((r) => `custom:${r.id}` === tn);
+      window.__RP.play({ uri: rg?.uri || rawUri(TUNES.some((x) => x.id === tn) ? tn : "chime"), loop: false })
+        .then(() => setTimeout(() => window.__RP.stop().catch(() => {}), 6000)).catch(() => play("chime"));
+    } else play(tn);
   };
   const pickSys = async () => {
     try {
@@ -456,24 +440,9 @@ export default function LifeArc() {
       setTune(`custom:${id}`); setRingMsg("");
     } catch { /* cancelled */ }
   };
-  const pickRing = async (e) => {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) return;
-    if (data.rings.length >= 10) return setRingMsg("Limit of 10 ringtones. Remove one first.");
-    if (!f.type.startsWith("audio/") && !/\.(mp3|m4a|aac|wav|ogg|opus|flac)$/i.test(f.name)) return setRingMsg("That file isn't an audio file.");
-    if (f.size > 20 * 1024 * 1024) return setRingMsg("File is over 20 MB. Pick a shorter clip.");
-    const id = "r" + Date.now();
-    try {
-      await ringPut(id, { blob: f });
-      setData((d) => ({ ...d, rings: [...d.rings, { id, name: f.name.replace(/\.[^.]+$/, "").slice(0, 28) }] }));
-      setTune(`custom:${id}`); setRingMsg("");
-    } catch { setRingMsg("Couldn't save the ringtone on this device."); }
-  };
   const delRing = async (id) => {
-    try { await ringDel(id); } catch { /* ignore */ }
     setData((d) => ({ ...d, rings: d.rings.filter((r) => r.id !== id), alarms: d.alarms.map((a) => (a.tune === `custom:${id}` ? { ...a, tune: "chime" } : a)) }));
-    setTune("chime"); stop();
+    setTune("chime"); window.__RP?.stop().catch(() => {});
   };
   const setAlarmTune = (id, t) => { setData((d) => ({ ...d, alarms: d.alarms.map((a) => (a.id === id ? { ...a, tune: t } : a)) })); previewT(t); };
   const snooze = () => { setSnoozes((q) => [...q, { alarm: alert, at: Date.now() + 5 * 60000 }]); setAlert(null); };
@@ -487,6 +456,19 @@ export default function LifeArc() {
   const initials = P.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   const digits = P.phone.replace(/\D/g, "").length;
   const phoneBad = P.phone && (/[^\d\s+-]/.test(P.phone) || digits < 7 || digits > 15);
+  // Challenge: same periods as the Progress tab; my daily % for the days friends compare
+  const periods = useMemo(() => ({
+    today: [today],
+    week: span(addDays(now, -6), 7).map(dk),
+    month: span(new Date(ys, now.getMonth(), 1), new Date(ys, now.getMonth() + 1, 0).getDate()).map(dk),
+    season: span(sStart0, sLen).map(dk),
+  }), [today]); // eslint-disable-line react-hooks/exhaustive-deps
+  const syncPayload = useMemo(() => {
+    const since = Object.keys(data.logs).sort()[0] || today, from = [periods.season[0], periods.week[0]].sort()[0], days = {};
+    new Set([...periods.season, ...periods.week]).forEach((k) => { if (k >= since && k <= today && k >= from) days[k] = pctOf(k); });
+    return { since, days };
+  }, [data.logs, data.habits, periods, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ch = useChallenge({ name: data.profile.name.trim(), payload: syncPayload });
   const setProf = (patch) => setData((d) => ({ ...d, profile: { ...d.profile, ...patch } }));
   const inp = "mt-1 w-full rounded-lg border border-neutral-700 bg-black px-3 py-2.5 text-sm text-neutral-100 outline-none focus:border-red-500";
   const gItems = itemsOf(data.goals[`${ys}-${pad(now.getMonth() + 1)}`]);
@@ -668,28 +650,13 @@ export default function LifeArc() {
           </>
         )}
 
-        {tab === "sleep" && (
-          <Card title="Sleep, last 7 days" icon={Moon} right={<span className="text-sm text-neutral-400">avg {avg}h</span>}>
-            <LineChart points={week.map((w) => ({ l: w.day, v: w.hrs }))} max={12} ticks={[0, 3, 6, 9, 12]} target={SLEEP_TARGET} showVals />
-            <p className="mt-2 text-xs text-neutral-500">{logged.filter((w) => w.hrs >= SLEEP_TARGET).length} of {logged.length} logged nights hit {SLEEP_TARGET}h.</p>
-            <div className="mt-3 grid grid-cols-7 gap-1.5">
-              {week.map((w) => (
-                <label key={w.key} className="text-center text-[10px] text-neutral-500">{w.day}
-                  <input type="number" inputMode="decimal" step="0.5" min="0" max="16" placeholder="–" value={w.hrs ?? ""} onChange={(e) => setSleep(w.key, e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-neutral-700 bg-black py-2 text-center text-sm text-neutral-100 outline-none focus:border-red-500" />
-                </label>
-              ))}
-            </div>
-          </Card>
-        )}
-
         {tab === "track" && (
-          <Card title="Track" icon={Activity} right={curT && !addingT && <button onClick={delTracker} aria-label="Delete this track" className="text-neutral-500 hover:text-red-500"><Trash2 size={16} /></button>}>
+          <Card title="Track" icon={Activity} right={curT && curT.id !== "sleep" && !addingT && <button onClick={delTracker} aria-label="Delete this track" className="text-neutral-500 hover:text-red-500"><Trash2 size={16} /></button>}>
             <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
               {data.trackers.map((t) => (
                 <button key={t.id} onClick={() => { setTrk(t.id); setAddingT(false); }} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${curT?.id === t.id && !addingT ? "bg-red-600 text-white" : "border border-neutral-700 text-neutral-300"}`}>{t.name}</button>
               ))}
-              <button onClick={() => setAddingT(true)} disabled={data.trackers.length >= 8} className={`flex shrink-0 items-center gap-1 rounded-full border border-dashed border-red-500 px-3 py-1.5 text-sm text-red-400 ${addingT ? "bg-red-500/10" : ""}`}><Plus size={14} /> Add track</button>
+              <button onClick={() => setAddingT(true)} disabled={data.trackers.length >= 9} className={`flex shrink-0 items-center gap-1 rounded-full border border-dashed border-red-500 px-3 py-1.5 text-sm text-red-400 ${addingT ? "bg-red-500/10" : ""}`}><Plus size={14} /> Add track</button>
             </div>
             {addingT && (
               <div className="space-y-2">
@@ -724,6 +691,7 @@ export default function LifeArc() {
                 <p className="mt-2 text-xs text-neutral-500">
                   Average {tAvg}{curT.unit}. {tLogged.filter((w) => tOk(w.v)).length} of {tLogged.length} logged days {curT.mode === "max" ? "within the limit" : "hit the goal"}.
                   {curT.id === "screen" && " A web app can't read phone screen time, so copy it from Digital Wellbeing."}
+                  {curT.id === "sleep" && " Enter the hours you slept each night. Change the goal above any time."}
                 </p>
                 <div className="mt-3 grid grid-cols-7 gap-1.5">
                   {tWeek.map((w) => (
@@ -736,6 +704,8 @@ export default function LifeArc() {
             )}
           </Card>
         )}
+
+        {tab === "challenge" && <ChallengeTab ch={ch} name={P.name} setName={(v) => setProf({ name: v })} periods={periods} today={today} payload={syncPayload} seasonName={SE.name} />}
 
         {tab === "alarms" && (
           <>
@@ -765,10 +735,6 @@ export default function LifeArc() {
             </div>
             <div className="mt-2 flex gap-2">
               {window.__RP && <button onClick={pickSys} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-dashed border-red-500 py-2.5 text-sm text-red-400 active:bg-red-500/10"><Music size={16} /> Device sounds</button>}
-              <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-red-500 py-2.5 text-sm text-red-400 active:bg-red-500/10">
-                <Music size={16} /> {window.__RP ? "Audio file" : "Pick ringtone from device"}
-                <input type="file" accept="audio/*" className="hidden" onChange={pickRing} />
-              </label>
               {tune.startsWith("custom:") && <button onClick={() => delRing(tune.slice(7))} aria-label="Remove ringtone" className="rounded-lg border border-neutral-700 px-3 text-neutral-400 hover:text-red-500"><Trash2 size={16} /></button>}
             </div>
             {ringMsg && <p className="mt-1 text-xs text-red-400">{ringMsg}</p>}
@@ -815,7 +781,7 @@ export default function LifeArc() {
         <div className="mx-auto flex max-w-xl">
           {TABS.map(([id, l, Icon]) => (
             <button key={id} onClick={() => setTab(id)} aria-current={tab === id} className={`flex flex-1 flex-col items-center gap-1 py-3 text-xs font-medium ${tab === id ? "text-red-500" : "text-neutral-500"}`}>
-              <Icon size={20} />{l}
+              <span className="relative"><Icon size={20} />{id === "challenge" && ch.incoming.length > 0 && <span className="absolute -right-1.5 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-black" />}</span>{l}
             </button>
           ))}
         </div>
@@ -844,6 +810,8 @@ export default function LifeArc() {
           </div>
         </div>
       )}
+
+      {tab !== "challenge" && !alert && <InviteAlert ch={ch} onOpen={() => setTab("challenge")} />}
 
       {alert && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 p-6">
