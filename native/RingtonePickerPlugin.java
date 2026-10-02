@@ -3,6 +3,7 @@ package com.teclipse.lifearc;
 import android.app.Activity;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioAttributes;
@@ -11,6 +12,8 @@ import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -143,6 +146,66 @@ public class RingtonePickerPlugin extends Plugin {
             ch.enableVibration(true);
             nm.createNotificationChannel(ch);
         }
+        call.resolve();
+    }
+
+    // ---- keep alarms alive when the app is closed ----
+    @PluginMethod
+    public void batteryStatus(PluginCall call) {
+        boolean ok = true;
+        if (Build.VERSION.SDK_INT >= 23) {
+            PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+            ok = pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
+        }
+        JSObject ret = new JSObject();
+        ret.put("unrestricted", ok);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void batteryAllow(PluginCall call) {
+        String pkg = getContext().getPackageName();
+        try {
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + pkg));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+        } catch (Exception e) {
+            try {
+                Intent i2 = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                i2.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(i2);
+            } catch (Exception ignored) { }
+        }
+        call.resolve();
+    }
+
+    // Opens the phone maker's "Auto-start / background" screen when it exists, otherwise this app's settings page.
+    @PluginMethod
+    public void openAutostart(PluginCall call) {
+        String[][] targets = {
+            { "com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity" },
+            { "com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity" },
+            { "com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity" },
+            { "com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity" },
+            { "com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity" },
+            { "com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity" },
+            { "com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity" }
+        };
+        for (String[] t : targets) {
+            try {
+                Intent i = new Intent();
+                i.setComponent(new ComponentName(t[0], t[1]));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(i);
+                call.resolve();
+                return;
+            } catch (Exception ignored) { }
+        }
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getContext().getPackageName()));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+        } catch (Exception ignored) { }
         call.resolve();
     }
 

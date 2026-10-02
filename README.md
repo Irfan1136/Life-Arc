@@ -49,3 +49,9 @@ Data wipes when Android makes you uninstall before installing a new APK. That ha
 - The restore sheet opens only on a fresh install (no data, no backup yet). Restore, or "I'm new" to start auto backup, or Skip. It never comes back after that. Backup settings stay in Profile.
 - Restore works any number of times, on any day: same phone number + same PIN, no OTP, no SMS cost.
 - Firestore rules: no change needed in v5.
+
+## v6 changes
+- Edit list shows only on Today. Editing the habit list takes effect from today; older days keep the list they had, so their percentages, winning days and the streak never change (`hv` history in the backup).
+- Progress > Seasons has a filter: This season / This year / Overall (Overall adds an all-time total).
+- Alarms tab > "Ring when the app is closed": exact-alarm status, battery limit, Auto-start shortcut and a "notify me in 1 minute" test. Some phones (Xiaomi, Oppo, Realme, Vivo) stop apps in the background; allow Auto-start, set Battery to No restrictions and lock the app in Recent apps.
+- Firestore rules: no change needed.

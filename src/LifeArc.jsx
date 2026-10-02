@@ -74,6 +74,8 @@ const mean = (a) => (a.length ? Math.round(a.reduce((s, v) => s + v, 0) / a.leng
 
 const SLEEP = { id: "sleep", name: "Sleep", unit: "h", target: 7, mode: "min" };
 const withSleep = (t) => (t.some((x) => x.id === "sleep") ? t : [SLEEP, ...t]);
+// the habit list each day was lived with: [{from:"YYYY-MM-DD", list:[...]}], ascending. Editing the list only adds a version starting today.
+const habitsFor = (d, k) => { let r = null; for (const v of d.hv || []) { if (v.from <= k) r = v; else break; } return r ? r.list : d.habits; };
 const okRings = (r) => (r || []).filter((x) => x.uri);
 const fixAlarm = (rings) => (a) => (a.tune?.startsWith("custom:") && !rings.some((x) => `custom:${x.id}` === a.tune) ? { ...a, tune: "chime" } : a);
 const SCREEN = { id: "screen", name: "Screen time", unit: "h", target: 3, mode: "max" };
@@ -82,11 +84,11 @@ function load() {
     const r = JSON.parse(localStorage.getItem(KEY));
     return {
       logs: r?.logs || {}, sleep: r?.sleep || {}, alarms: (r?.alarms || []).map(fixAlarm(okRings(r?.rings))), habits: r?.habits?.length ? r.habits : DEFAULT_HABITS,
-      goals: r?.goals || {}, pct: r?.pct || {}, remind: r?.remind !== false, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
+      goals: r?.goals || {}, pct: r?.pct || {}, hv: Array.isArray(r?.hv) ? r.hv : [], remind: r?.remind !== false, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
       trackers: withSleep(Array.isArray(r?.trackers) ? r.trackers : [{ ...SCREEN, target: r?.screenLimit ?? 3 }]),
       tracks: r?.tracks || (r?.screen ? { screen: r.screen } : {}),
     };
-  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, pct: {}, remind: true, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {} }; }
+  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, pct: {}, hv: [], remind: true, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {} }; }
 }
 
 const PKG = "com.teclipse.lifearc";
@@ -215,6 +217,9 @@ export default function LifeArc() {
   const alarmsRef = useRef([]);
   const { unlock, play } = useChime();
   const [ringMsg, setRingMsg] = useState("");
+  const [seaF, setSeaF] = useState("year");
+  const [rel, setRel] = useState({ exact: "unknown", battery: null });
+  const [relMsg, setRelMsg] = useState("");
   const [showDays, setShowDays] = useState(false); // the previous-dates strip is hidden until you tap the button
   const [viewDay, setViewDay] = useState(null); // null = today; otherwise a past day you are checking
   const [bk, setBk] = useState(() => { try { return JSON.parse(localStorage.getItem(BKKEY)); } catch { return null; } });
@@ -234,8 +239,9 @@ export default function LifeArc() {
   // habit list later never changes an old percentage, a winning day or the streak.
   const winStart = dk(addDays(now, -EDIT_BACK));
   const frozen = (k) => (k < winStart && data.pct?.[k]) || null;
-  const score = (k) => (frozen(k) ? frozen(k).s : ids.filter((id) => data.logs[k]?.[id]).length);
-  const nOf = (k) => (frozen(k) ? frozen(k).n : n);
+  const hOn = (k) => habitsFor(data, k);
+  const score = (k) => (frozen(k) ? frozen(k).s : hOn(k).filter((h) => data.logs[k]?.[h.id]).length);
+  const nOf = (k) => (frozen(k) ? frozen(k).n : hOn(k).length);
   const pctOf = (k) => (nOf(k) ? Math.round((score(k) / nOf(k)) * 100) : 0);
   const label = (id) => H.find((h) => h.id === id)?.label || "Habit";
   alarmsRef.current = data.alarms;
@@ -249,17 +255,17 @@ export default function LifeArc() {
   // save every day's score (and how many habits there were) so percentages, winning days and the streak stay fixed
   useEffect(() => {
     setData((d) => {
-      const hid = d.habits.map((h) => h.id), cnt = hid.length;
       const pct = { ...(d.pct || {}) };
       let ch = false;
       for (const k of Object.keys(d.logs)) {
         if (k < winStart && pct[k]) continue;
-        const sc = hid.filter((id) => d.logs[k]?.[id]).length;
+        const hl = habitsFor(d, k), cnt = hl.length;
+        const sc = hl.filter((h) => d.logs[k]?.[h.id]).length;
         if (!pct[k] || pct[k].s !== sc || pct[k].n !== cnt) { pct[k] = { s: sc, n: cnt }; ch = true; }
       }
       return ch ? { ...d, pct } : d;
     });
-  }, [data.logs, data.habits, winStart]);
+  }, [data.logs, data.habits, data.hv, winStart]);
 
   // notification permission: asked on first launch in the Android app, by button in the browser
   const readPerm = async () => {
@@ -279,6 +285,31 @@ export default function LifeArc() {
     readPerm();
   };
   useEffect(() => { readPerm(); if (window.__LN) askPerm(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // can the phone ring alarms with the app closed? exact alarms allowed + no battery limit
+  const readRel = async () => {
+    if (!window.__LN) return;
+    let exact = "unknown", battery = null;
+    try { const r = await window.__LN.checkExactNotificationSetting(); exact = r.exact_alarm === "granted" ? "granted" : "denied"; } catch { /* older Android */ }
+    try { const r = await window.__RP.batteryStatus(); battery = !!r.unrestricted; } catch { /* unknown */ }
+    setRel({ exact, battery });
+  };
+  useEffect(() => {
+    readRel();
+    const v = () => { if (document.visibilityState === "visible") readRel(); };
+    document.addEventListener("visibilitychange", v);
+    return () => document.removeEventListener("visibilitychange", v);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const testBg = async () => {
+    try {
+      const LN = window.__LN;
+      const p = await LN.requestPermissions();
+      if (p.display !== "granted") { setRelMsg("Allow notifications first."); return; }
+      try { await LN.createChannel({ id: "reminders", name: "Daily reminders", description: "Reminds you to fill your tasks", importance: 4, vibration: true }); } catch { /* default */ }
+      await LN.schedule({ notifications: [{ id: 2000000010, title: "Life Arc", body: "Test OK: this notification came with the app closed.", channelId: "reminders", schedule: { at: new Date(Date.now() + 60000), allowWhileIdle: true } }] });
+      setRelMsg("Test set. Now swipe Life Arc away from Recent apps and wait 1 minute. If the notification does not come, your phone is stopping the app: do the steps above.");
+    } catch { setRelMsg("Could not set the test. Check that notifications are allowed."); }
+  };
 
   // native background alarms (Android app only)
   useEffect(() => {
@@ -367,7 +398,8 @@ export default function LifeArc() {
   const vd = viewDay && viewDay < today && viewDay >= winStart ? viewDay : today; // the day shown on the Today tab
   const vScore = score(vd);
   const vPct = pctOf(vd);
-  const need = Math.ceil((n * WIN_PCT) / 100);
+  const need = Math.ceil((nOf(vd) * WIN_PCT) / 100);
+  const HL = vd === today ? H : hOn(vd); // a past day shows the habits it had
   const toggle = (id) => setData((d) => ({ ...d, logs: { ...d.logs, [vd]: { ...d.logs[vd], [id]: !d.logs[vd]?.[id] } } }));
   const vdDate = new Date(vd + "T00:00:00");
   const vdTitle = vd === today ? "Today's disciplines" : vd === dk(addDays(now, -1)) ? "Yesterday's disciplines" : `${DAYN[vdDate.getDay()]} ${vdDate.getDate()} ${vdDate.toLocaleDateString(undefined, { month: "short" })} disciplines`;
@@ -466,7 +498,14 @@ export default function LifeArc() {
   }, [bk]);
 
   // habit list editing
-  const setH = (fn) => setData((d) => ({ ...d, habits: fn(d.habits) }));
+  const setH = (fn) => setData((d) => {
+    const next = fn(d.habits);
+    if (next === d.habits) return d;
+    const t = dk(new Date());
+    const hv = d.hv?.length ? [...d.hv] : [{ from: "0000-00-00", list: d.habits }];
+    if (hv[hv.length - 1].from === t) hv[hv.length - 1] = { from: t, list: next }; else hv.push({ from: t, list: next });
+    return { ...d, habits: next, hv };
+  });
   const rename = (id, l) => setH((hs) => hs.map((h) => (h.id === id ? { ...h, label: l } : h)));
   const del = (id) => setH((hs) => (hs.length > 1 ? hs.filter((h) => h.id !== id) : hs));
   const move = (i, dir) => setH((hs) => { const a = [...hs], j = i + dir; if (j < 0 || j >= a.length) return hs; [a[i], a[j]] = [a[j], a[i]]; return a; });
@@ -521,8 +560,15 @@ export default function LifeArc() {
       const vs = span(st, len).map(at).filter((v) => v != null);
       return { ...se, avg: mean(vs), wins: vs.filter((v) => v >= WIN_PCT).length, days: vs.length, current: q === sq };
     });
-    return { streak, rate, chart, cons, months, seasons };
-  }, [data.logs, data.habits, data.goals, data.pct, today]); // eslint-disable-line react-hooks/exhaustive-deps
+    // every day from the first log to today, for the season filter (This season / This year / Overall)
+    const allDays = [];
+    for (let c = new Date(fk + "T00:00:00"); dk(c) <= today; c = addDays(c, 1)) allDays.push({ q: Math.floor(c.getMonth() / 3), m: c.getMonth(), y: c.getFullYear(), v: pctOf(dk(c)) });
+    const sumUp = (xs) => ({ avg: mean(xs.map((x) => x.v)), wins: xs.filter((x) => x.v >= WIN_PCT).length, days: xs.length });
+    const seasonsAll = SEASONS.map((se, q) => ({ ...se, ...sumUp(allDays.filter((x) => x.q === q)), current: q === sq }));
+    const allTime = sumUp(allDays);
+    const seasonMonths = [0, 1, 2].map((i) => ({ name: new Date(ys, sq * 3 + i, 1).toLocaleDateString(undefined, { month: "long" }), ...sumUp(allDays.filter((x) => x.y === ys && x.m === sq * 3 + i)) }));
+    return { streak, rate, chart, cons, months, seasons, seasonsAll, allTime, seasonMonths };
+  }, [data.logs, data.habits, data.hv, data.goals, data.pct, today]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pts = stats.chart[range];
   const vals = pts.map((p) => p.v).filter((v) => v != null);
@@ -619,7 +665,7 @@ export default function LifeArc() {
     const since = Object.keys(data.logs).sort()[0] || today, from = [periods.season[0], periods.week[0]].sort()[0], days = {};
     new Set([...periods.season, ...periods.week]).forEach((k) => { if (k >= since && k <= today && k >= from) days[k] = pctOf(k); });
     return { since, days };
-  }, [data.logs, data.habits, periods, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data.logs, data.habits, data.hv, data.pct, periods, today]); // eslint-disable-line react-hooks/exhaustive-deps
   const ch = useChallenge({ name: data.profile.name.trim(), payload: syncPayload });
   const setProf = (patch) => setData((d) => ({ ...d, profile: { ...d.profile, ...patch } }));
   const inp = "mt-1 w-full rounded-lg border border-neutral-700 bg-black px-3 py-2.5 text-sm text-neutral-100 outline-none focus:border-red-500";
@@ -661,10 +707,10 @@ export default function LifeArc() {
               {gItems.length > 0 && <p className="mt-1 text-sm text-neutral-200">Monthly goals: {gDone}/{gItems.length} achieved{gNext ? `. Next: ${gNext.text}` : ". All done."}</p>}
             </div>
 
-            <Card title={vdTitle} icon={Check} right={
+            <Card title={vdTitle} icon={Check} right={vd === today ? (
               <button onClick={() => setEdit(!edit)} className="flex items-center gap-1 rounded-lg border border-neutral-700 px-2 py-1 text-xs text-neutral-300 active:bg-neutral-800">
                 {edit ? <><Check size={14} /> Done</> : <><Pencil size={14} /> Edit list</>}
-              </button>}>
+              </button>) : null}>
               {!edit && (
                 <div className="mb-3">
                   <div className="flex items-center gap-2">
@@ -699,13 +745,13 @@ export default function LifeArc() {
                 <div className="mb-4">
                   <div className="mb-1 flex justify-between text-xs text-neutral-400">
                     <span>{vScore >= need ? "Day won" : `${need - vScore} more to win the day`}</span>
-                    <span className="font-semibold text-red-500">{vScore}/{n} · {vPct}%</span>
+                    <span className="font-semibold text-red-500">{vScore}/{nOf(vd)} · {vPct}%</span>
                   </div>
                   <Bar value={vPct} className="bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.7)]" />
                 </div>
               )}
               <ul className="space-y-2">
-                {H.map((h, i) => {
+                {HL.map((h, i) => {
                   const Icon = ICONS[h.id] || Flame;
                   const on = !!data.logs[vd]?.[h.id];
                   if (edit) return (
@@ -780,20 +826,52 @@ export default function LifeArc() {
               {consList.length > 1 && <p className="mt-3 text-xs text-neutral-500">Weakest this period: {consList[0].label}. Fix that one first.</p>}
             </Card>
 
-            <Card title="Four seasons" icon={Snowflake}>
-              <div className="grid grid-cols-2 gap-2">
-                {stats.seasons.map((se) => {
-                  const Icon = se.icon;
-                  return (
-                    <div key={se.name} className={`rounded-xl border p-3 ${se.current ? "border-red-500 bg-red-500/10" : "border-neutral-800 bg-black"}`}>
-                      <p className="flex items-center gap-2 text-sm font-semibold"><Icon size={16} className={se.current ? "text-red-500" : "text-neutral-500"} />{se.name}</p>
-                      <p className="text-[11px] text-neutral-500">{se.months}{se.current ? " · now" : ""}</p>
-                      <p className="mt-2 text-xl font-bold text-red-500">{se.days ? `${se.avg}%` : "–"}</p>
-                      <p className="text-[11px] text-neutral-500">{se.days ? `${se.wins} winning days` : "no data yet"}</p>
-                    </div>
-                  );
-                })}
+            <Card title="Seasons" icon={Snowflake}>
+              <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-black p-1">
+                {[["season", "This season"], ["year", "This year"], ["all", "Overall"]].map(([id, l]) => (
+                  <button key={id} onClick={() => setSeaF(id)} aria-pressed={seaF === id}
+                    className={`rounded-lg py-1.5 text-xs font-semibold ${seaF === id ? "bg-red-600 text-white" : "text-neutral-400 active:bg-neutral-800"}`}>{l}</button>
+                ))}
               </div>
+              {seaF === "season" && (() => {
+                const se = stats.seasons[sq0], Icon = se.icon;
+                return (
+                  <div className="rounded-xl border border-red-500 bg-red-500/10 p-3">
+                    <p className="flex items-center gap-2 text-sm font-semibold"><Icon size={16} className="text-red-500" />{se.name} <span className="text-[11px] font-normal text-neutral-500">{se.months} · now</span></p>
+                    <p className="mt-2 text-3xl font-bold text-red-500">{se.days ? `${se.avg}%` : "–"}</p>
+                    <p className="text-[11px] text-neutral-400">{se.days ? `${se.wins} winning days out of ${se.days} days tracked` : "no data yet"}</p>
+                    <ul className="mt-3 space-y-1.5">
+                      {stats.seasonMonths.map((m) => (
+                        <li key={m.name} className="flex items-center justify-between text-xs text-neutral-300">
+                          <span>{m.name}</span><span className="text-neutral-400">{m.days ? `${m.avg}% · ${m.wins} winning days` : "no data"}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+              {seaF !== "season" && (
+                <div className="grid grid-cols-2 gap-2">
+                  {(seaF === "all" ? stats.seasonsAll : stats.seasons).map((se) => {
+                    const Icon = se.icon;
+                    return (
+                      <div key={se.name} className={`rounded-xl border p-3 ${se.current && seaF === "year" ? "border-red-500 bg-red-500/10" : "border-neutral-800 bg-black"}`}>
+                        <p className="flex items-center gap-2 text-sm font-semibold"><Icon size={16} className={se.current && seaF === "year" ? "text-red-500" : "text-neutral-500"} />{se.name}</p>
+                        <p className="text-[11px] text-neutral-500">{se.months}{se.current && seaF === "year" ? " · now" : ""}</p>
+                        <p className="mt-2 text-xl font-bold text-red-500">{se.days ? `${se.avg}%` : "–"}</p>
+                        <p className="text-[11px] text-neutral-500">{se.days ? `${se.wins} winning days` : "no data yet"}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {seaF === "all" && (
+                <div className="mt-2 rounded-xl border border-neutral-800 bg-black p-3">
+                  <p className="text-sm font-semibold text-neutral-200">All time</p>
+                  <p className="mt-1 text-xl font-bold text-red-500">{stats.allTime.days ? `${stats.allTime.avg}%` : "–"}</p>
+                  <p className="text-[11px] text-neutral-500">{stats.allTime.days ? `${stats.allTime.wins} winning days out of ${stats.allTime.days} days tracked` : "no data yet"}</p>
+                </div>
+              )}
             </Card>
 
             <Card title={`${SE.name}: monthly goals`} icon={Target}>
@@ -912,6 +990,28 @@ export default function LifeArc() {
               <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${data.remind !== false ? "left-5" : "left-0.5"}`} />
             </button>
           </div>
+          {window.__LN && (
+            <Card title="Ring when the app is closed" icon={BellRing}>
+              <p className="text-xs text-neutral-400">Some phones stop apps in the background. Turn these on once so alarms and the 11:00 / 6:00 reminders come on time.</p>
+              <ul className="mt-3 space-y-2 text-sm">
+                <li className="flex items-center justify-between gap-2">
+                  <span className="text-neutral-200">Exact alarms: <span className={rel.exact === "denied" ? "text-amber-400" : "text-emerald-400"}>{rel.exact === "denied" ? "not allowed" : "allowed"}</span></span>
+                  {rel.exact === "denied" && <button onClick={async () => { try { await window.__LN.changeExactNotificationSetting(); } catch { /* ignore */ } }} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Allow</button>}
+                </li>
+                <li className="flex items-center justify-between gap-2">
+                  <span className="text-neutral-200">Battery limit: <span className={rel.battery === false ? "text-amber-400" : "text-emerald-400"}>{rel.battery === false ? "on (may stop alarms)" : "off"}</span></span>
+                  {rel.battery === false && <button onClick={() => window.__RP.batteryAllow().catch(() => {})} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Turn off</button>}
+                </li>
+                <li className="flex items-center justify-between gap-2">
+                  <span className="text-neutral-200">Auto-start / background</span>
+                  <button onClick={() => window.__RP.openAutostart().catch(() => {})} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Open</button>
+                </li>
+              </ul>
+              <p className="mt-2 text-xs text-neutral-500">In that screen: allow Auto-start for Life Arc, set Battery to "No restrictions", and lock Life Arc in Recent apps (long-press its card, then Lock).</p>
+              <button onClick={testBg} className="mt-3 w-full rounded-xl border border-neutral-600 py-2.5 text-sm text-neutral-200 active:bg-neutral-800">Test: notify me in 1 minute</button>
+              {relMsg && <p className="mt-2 text-xs text-neutral-300">{relMsg}</p>}
+            </Card>
+          )}
           <Card title="Alarms" icon={Bell}>
             <div className="flex gap-2">
               <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-36 shrink-0 rounded-lg border border-neutral-700 bg-black px-2 py-2 text-sm outline-none focus:border-red-500" />
