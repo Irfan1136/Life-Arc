@@ -63,3 +63,12 @@ Alarms are now rung by the phone itself (AlarmManager + a foreground service), n
 - the notification has Snooze 5 min and Stop buttons, and the full screen has the same two buttons;
 - they are booked again after a restart or an app update.
 Native files: native/Alarm*.java, BootReceiver.java, LifeAlarmPlugin.java. The workflow registers them in the manifest from resources/manifest-extra.xml.
+
+## Where your data is saved
+All app data (habits, daily logs, sleep and other tracks, alarms, profile, backup info) is stored in the phone's **IndexedDB** database `lifearc` (`src/store.js`). Data from older versions (localStorage) is moved over automatically the first time the new version opens. If IndexedDB is unavailable, the app falls back to localStorage.
+
+## Track filters
+In Track, choose **This week**, **This month** (any past month with the arrows) or the whole season (Winter Arc). Week and Month let you enter values; the season view is a summary by month.
+
+## Progress filters
+Performance on the Progress tab has **7 days / Month / Season / Overall**. Overall covers every day since your first logged day (weekly averages for the first ~20 weeks, monthly averages after that) and also drives Habit consistency.

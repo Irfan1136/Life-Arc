@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Users, UserPlus, Copy, Send, Trophy, Check, X } from "lucide-react";
 import * as S from "./social.js";
 import { APP_LINK } from "./firebase-config.js";
+import * as store from "./store.js";
 
 export const MAX_FRIENDS = 6;
 const FLAG = "la:challenge";
 const other = (l, me) => (l.fromUid === me ? { uid: l.toUid, name: l.toName, code: l.toCode } : { uid: l.fromUid, name: l.fromName, code: l.fromCode });
 
 export function useChallenge({ name, payload }) {
-  const [on, setOn] = useState(() => { try { return localStorage.getItem(FLAG) === "1"; } catch { return false; } });
+  const [on, setOn] = useState(() => { try { return store.get(FLAG) === "1"; } catch { return false; } });
   const [st, setSt] = useState("idle"); // idle | connecting | ready | error
   const [me, setMe] = useState(null);
   const [links, setLinks] = useState([]);
@@ -86,8 +87,8 @@ export function useChallenge({ name, payload }) {
     on, st, me, msg, pushErr, busy, incoming, outgoing, friends, used,
     alertFor: incoming.find((l) => !later.includes(l.id)),
     dismiss: (id) => setLater((x) => [...x, id]),
-    enable: () => { try { localStorage.setItem(FLAG, "1"); } catch { /* ignore */ } setOn(true); },
-    disable: () => { try { localStorage.setItem(FLAG, "0"); } catch { /* ignore */ } setOn(false); setSt("idle"); setLinks([]); setProg({}); },
+    enable: () => { try { store.set(FLAG, "1"); } catch { /* ignore */ } setOn(true); },
+    disable: () => { try { store.set(FLAG, "0"); } catch { /* ignore */ } setOn(false); setSt("idle"); setLinks([]); setProg({}); },
     retry: () => setTick((x) => x + 1),
     invite: (code) => act(async () => {
       if (used >= MAX_FRIENDS) throw Object.assign(new Error("full"), { la: "full" });

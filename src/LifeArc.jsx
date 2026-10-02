@@ -6,6 +6,7 @@ import {
 import { useChallenge, ChallengeTab, InviteAlert } from "./Challenge.jsx";
 import * as S from "./social.js";
 import logo from "./logo.png";
+import * as store from "./store.js";
 
 const KEY = "winterArc:v1";
 const EDIT_BACK = 3; // today + the previous 3 days can be edited; older days are locked
@@ -81,7 +82,7 @@ const fixAlarm = (rings) => (a) => (a.tune?.startsWith("custom:") && !rings.some
 const SCREEN = { id: "screen", name: "Screen time", unit: "h", target: 3, mode: "max" };
 function load() {
   try {
-    const r = JSON.parse(localStorage.getItem(KEY));
+    const r = JSON.parse(store.get(KEY));
     return {
       logs: r?.logs || {}, sleep: r?.sleep || {}, alarms: (r?.alarms || []).map(fixAlarm(okRings(r?.rings))), habits: r?.habits?.length ? r.habits : DEFAULT_HABITS,
       goals: r?.goals || {}, pct: r?.pct || {}, hv: Array.isArray(r?.hv) ? r.hv : [], remind: r?.remind !== false, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
@@ -171,7 +172,7 @@ function LineChart({ points, max = 100, ticks = [0, 50, 100], target, tLabel = "
         <g key={i}>
           {p.v != null && <circle cx={x(i)} cy={y(p.v)} r="3" fill="#000" stroke="#ef4444" strokeWidth="2" />}
           {p.v != null && showVals && <text x={x(i)} y={y(p.v) - 8} textAnchor="middle" fontSize="10" fill="#e5e5e5">{p.v}</text>}
-          {i % step === 0 && <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="10" fill="#737373">{p.l}</text>}
+          {i % step === 0 && <text x={x(i)} y={H - 8} textAnchor={x(i) > W - 30 ? "end" : "middle"} fontSize="10" fill="#737373">{p.l}</text>}
         </g>
       ))}
     </svg>
@@ -212,6 +213,8 @@ export default function LifeArc() {
   const [days, setDays] = useState([]);
   const [trk, setTrk] = useState("sleep");
   const [wkOff, setWkOff] = useState(0); // 0 = this week, -1 = last week ...
+  const [tRange, setTRange] = useState("week"); // Track view: week | month | season
+  const [moOff, setMoOff] = useState(0); // 0 = this month, -1 = last month ...
   const [addingT, setAddingT] = useState(false);
   const [nt, setNt] = useState({ name: "", unit: "h", target: "1", mode: "min" });
   const [gIn, setGIn] = useState({});
@@ -223,15 +226,15 @@ export default function LifeArc() {
   const [fs, setFs] = useState(true); // may the alarm open over other apps / the lock screen
   const [showDays, setShowDays] = useState(false); // the previous-dates strip is hidden until you tap the button
   const [viewDay, setViewDay] = useState(null); // null = today; otherwise a past day you are checking
-  const [bk, setBk] = useState(() => { try { return JSON.parse(localStorage.getItem(BKKEY)); } catch { return null; } });
+  const [bk, setBk] = useState(() => { try { return JSON.parse(store.get(BKKEY)); } catch { return null; } });
   const [bkPin, setBkPin] = useState("");
   const [bkMsg, setBkMsg] = useState("");
   const [bkBusy, setBkBusy] = useState(false);
-  const [bkAt, setBkAt] = useState(() => { try { return +localStorage.getItem(BKAT) || 0; } catch { return 0; } });
+  const [bkAt, setBkAt] = useState(() => { try { return +store.get(BKAT) || 0; } catch { return 0; } });
   const [bkFail, setBkFail] = useState("");
   // the restore sheet opens only on a fresh install (no data, no backup set up, not skipped before)
-  const [needSetup, setNeedSetup] = useState(() => { try { return !localStorage.getItem(SETKEY) && !localStorage.getItem(BKKEY) && Object.keys(load().logs).length === 0; } catch { return false; } });
-  const skipSetup = () => { try { localStorage.setItem(SETKEY, "1"); } catch { /* ignore */ } setNeedSetup(false); setBkMsg(""); };
+  const [needSetup, setNeedSetup] = useState(() => { try { return !store.get(SETKEY) && !store.get(BKKEY) && Object.keys(load().logs).length === 0; } catch { return false; } });
+  const skipSetup = () => { try { store.set(SETKEY, "1"); } catch { /* ignore */ } setNeedSetup(false); setBkMsg(""); };
 
   const today = dk(now);
   const H = data.habits, n = H.length;
@@ -250,7 +253,7 @@ export default function LifeArc() {
   dataRef.current = data;
 
   useEffect(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* storage blocked */ }
+    try { store.set(KEY, JSON.stringify(data)); } catch { /* storage blocked */ }
   }, [data]);
 
   // save every day's score (and how many habits there were) so percentages, winning days and the streak stay fixed
@@ -410,21 +413,21 @@ export default function LifeArc() {
 
   // phone + PIN backup
   const phone10 = data.profile.phone.replace(/\D/g, "").slice(0, 10);
-  const saveBk = (v) => { try { if (v) localStorage.setItem(BKKEY, JSON.stringify(v)); else localStorage.removeItem(BKKEY); } catch { /* ignore */ } setBk(v); };
+  const saveBk = (v) => { try { if (v) store.set(BKKEY, JSON.stringify(v)); else store.remove(BKKEY); } catch { /* ignore */ } setBk(v); };
   const bkCheck = () => {
     if (phone10.length !== 10) { setBkMsg("Enter your 10-digit phone number above first."); return null; }
     if (!/^\d{6}$/.test(bkPin)) { setBkMsg("Choose a 6-digit PIN."); return null; }
     return true;
   };
   const markSent = (json) => {
-    try { localStorage.setItem(BKHASH, hashOf(json)); localStorage.setItem(BKAT, String(Date.now())); } catch { /* ignore */ }
+    try { store.set(BKHASH, hashOf(json)); store.set(BKAT, String(Date.now())); } catch { /* ignore */ }
     setBkAt(Date.now()); setBkFail("");
   };
   const applyRestore = (jsonStr) => {
     const restored = JSON.parse(jsonStr);
     const mine = dataRef.current.rings || [], theirs = Array.isArray(restored.rings) ? restored.rings : [];
     const rings = [...theirs, ...mine.filter((r) => !theirs.some((x) => x.id === r.id || x.uri === r.uri))].slice(0, 10);
-    try { localStorage.setItem(KEY, JSON.stringify({ ...restored, rings })); } catch { /* ignore */ }
+    try { store.set(KEY, JSON.stringify({ ...restored, rings })); } catch { /* ignore */ }
     setData(load());
   };
   const bkTurnOn = async () => {
@@ -472,7 +475,7 @@ export default function LifeArc() {
     const b = bkRef.current;
     if (!b?.key || syncing.current) return;
     const json = backupJson(dataRef.current), h = hashOf(json);
-    let last = ""; try { last = localStorage.getItem(BKHASH) || ""; } catch { /* ignore */ }
+    let last = ""; try { last = store.get(BKHASH) || ""; } catch { /* ignore */ }
     if (h === last) return;
     syncing.current = true;
     let ok = false;
@@ -538,10 +541,23 @@ export default function LifeArc() {
       week: span(addDays(now, -6), 7),
       month: span(new Date(ys, mo, 1), new Date(ys, mo + 1, 0).getDate()),
       season: span(sStart, sDays),
+      all: span(new Date(fk + "T00:00:00"), span0),
     };
+    // overall chart: weekly averages for the first ~20 weeks, monthly averages after that
+    const yrs = new Set(periods.all.map((d) => d.getFullYear())).size > 1;
+    const allPts = span0 <= 140
+      ? Array.from({ length: Math.ceil(span0 / 7) }, (_, w) => {
+        const vs = periods.all.slice(w * 7, w * 7 + 7).map(at).filter((v) => v != null);
+        return { l: `W${w + 1}`, v: vs.length ? mean(vs) : null };
+      })
+      : [...new Set(periods.all.map((d) => `${d.getFullYear()}-${d.getMonth()}`))].map((ym) => {
+        const ds = periods.all.filter((d) => `${d.getFullYear()}-${d.getMonth()}` === ym), vs = ds.map(at).filter((v) => v != null);
+        return { l: ds[0].toLocaleDateString(undefined, yrs ? { month: "short", year: "2-digit" } : { month: "short" }), v: vs.length ? mean(vs) : null };
+      });
     const chart = {
       week: periods.week.map((d) => ({ l: d.toLocaleDateString(undefined, { weekday: "short" }), v: at(d) })),
       month: periods.month.map((d) => ({ l: String(d.getDate()), v: at(d) })),
+      all: allPts,
       season: Array.from({ length: Math.ceil(sDays / 7) }, (_, w) => {
         const vs = periods.season.slice(w * 7, w * 7 + 7).map(at).filter((v) => v != null);
         return { l: `W${w + 1}`, v: vs.length ? mean(vs) : null };
@@ -566,11 +582,11 @@ export default function LifeArc() {
     // every day from the first log to today, for the season filter (This season / This year / Overall)
     const allDays = [];
     for (let c = new Date(fk + "T00:00:00"); dk(c) <= today; c = addDays(c, 1)) allDays.push({ q: Math.floor(c.getMonth() / 3), m: c.getMonth(), y: c.getFullYear(), v: pctOf(dk(c)) });
-    const sumUp = (xs) => ({ avg: mean(xs.map((x) => x.v)), wins: xs.filter((x) => x.v >= WIN_PCT).length, days: xs.length });
+    const sumUp = (xs) => ({ avg: mean(xs.map((x) => x.v)), best: xs.length ? Math.max(...xs.map((x) => x.v)) : 0, wins: xs.filter((x) => x.v >= WIN_PCT).length, days: xs.length });
     const seasonsAll = SEASONS.map((se, q) => ({ ...se, ...sumUp(allDays.filter((x) => x.q === q)), current: q === sq }));
     const allTime = sumUp(allDays);
     const seasonMonths = [0, 1, 2].map((i) => ({ name: new Date(ys, sq * 3 + i, 1).toLocaleDateString(undefined, { month: "long" }), ...sumUp(allDays.filter((x) => x.y === ys && x.m === sq * 3 + i)) }));
-    return { streak, rate, chart, cons, months, seasons, seasonsAll, allTime, seasonMonths };
+    return { streak, rate, chart, cons, months, seasons, seasonsAll, allTime, seasonMonths, firstDay: fk };
   }, [data.logs, data.habits, data.hv, data.goals, data.pct, today]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pts = stats.chart[range];
@@ -588,10 +604,7 @@ export default function LifeArc() {
   const curT = data.trackers.find((t) => t.id === trk) || data.trackers[0];
   const tVals = curT ? (curT.id === "sleep" ? data.sleep : data.tracks[curT.id]) || {} : {};
   const tWeek = week.map((w) => ({ key: w.key, day: w.day, today: w.today, future: w.future, v: tVals[w.key] }));
-  const tLogged = tWeek.filter((w) => w.v != null);
-  const tAvg = tLogged.length ? +(tLogged.reduce((t, w) => t + w.v, 0) / tLogged.length).toFixed(1) : 0;
   const tOk = (v) => (curT.mode === "max" ? v <= curT.target : v >= curT.target);
-  const tTop = Math.ceil(curT ? Math.max(curT.target * 1.4, ...tLogged.map((w) => w.v), 1) : 1);
   const setTV = (key, v) =>
     setData((d) => {
       const isS = curT.id === "sleep", cur = { ...((isS ? d.sleep : d.tracks[curT.id]) || {}) };
@@ -656,6 +669,25 @@ export default function LifeArc() {
   const sq0 = Math.floor(now.getMonth() / 3), SE = SEASONS[sq0], sStart0 = new Date(ys, sq0 * 3, 1);
   const sLen = Math.round((new Date(ys, sq0 * 3 + 3, 1) - sStart0) / 864e5);
   const dayN = Math.floor((new Date(today + "T00:00:00") - sStart0) / 864e5) + 1;
+
+  // Track views: this week, any month, or the whole season so far
+  const mBase = new Date(now.getFullYear(), now.getMonth() + moOff, 1);
+  const mCells = span(mBase, new Date(mBase.getFullYear(), mBase.getMonth() + 1, 0).getDate()).map((d) => ({ key: dk(d), n: d.getDate(), col: (d.getDay() + 6) % 7, today: dk(d) === today, future: dk(d) > today || dk(d) < trackFloor }));
+  const canPrevM = dk(addDays(mBase, -1)) >= trackFloor;
+  const mLabel = moOff === 0 ? "This month" : mBase.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const sKeys = span(sStart0, sLen).map(dk).filter((k) => k <= today);
+  const monShort = (k) => new Date(+k.slice(0, 4), +k.slice(5, 7) - 1, 1).toLocaleDateString(undefined, { month: "short" });
+  const tPts = tRange === "week" ? tWeek.map((w) => ({ l: w.day, v: w.v }))
+    : tRange === "month" ? mCells.map((c) => ({ l: String(c.n), v: tVals[c.key] }))
+    : sKeys.map((k) => ({ l: `${+k.slice(8)} ${monShort(k)}`, v: tVals[k] }));
+  const tLogged = tPts.filter((p) => p.v != null);
+  const tAvg = tLogged.length ? +(tLogged.reduce((t, p) => t + p.v, 0) / tLogged.length).toFixed(1) : 0;
+  const tTop = Math.ceil(curT ? Math.max(curT.target * 1.4, ...tLogged.map((p) => p.v), 1) : 1);
+  const tHits = curT ? tLogged.filter((p) => tOk(p.v)).length : 0;
+  const sMonths = [...new Set(sKeys.map((k) => k.slice(0, 7)))].map((m) => {
+    const vs = sKeys.filter((k) => k.startsWith(m) && tVals[k] != null).map((k) => tVals[k]);
+    return { m, name: monShort(m + "-01"), n: vs.length, avg: vs.length ? +(vs.reduce((a, b) => a + b, 0) / vs.length).toFixed(1) : null };
+  });
   const P = data.profile, age = ageOf(P.dob);
   const initials = P.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
   const digits = P.phone.replace(/\D/g, "").length;
@@ -814,17 +846,20 @@ export default function LifeArc() {
             </div>
 
             <Card title="Performance" icon={TrendingUp}>
-              <div className="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-black p-1">
-                {[["week", "7 days"], ["month", "Month"], ["season", "Season"]].map(([id, l]) => (
-                  <button key={id} onClick={() => setRange(id)} className={`rounded-lg py-2 text-sm font-medium ${range === id ? "bg-red-600 text-white" : "text-neutral-400"}`}>{l}</button>
+              <div className="mb-3 grid grid-cols-4 gap-1 rounded-xl bg-black p-1">
+                {[["week", "7 days"], ["month", "Month"], ["season", "Season"], ["all", "Overall"]].map(([id, l]) => (
+                  <button key={id} onClick={() => setRange(id)} aria-pressed={range === id} className={`rounded-lg py-2 text-sm font-medium ${range === id ? "bg-red-600 text-white" : "text-neutral-400"}`}>{l}</button>
                 ))}
               </div>
               <LineChart points={pts} showVals={pts.length <= 8} />
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                {[[mean(vals) + "%", "average"], [(vals.length ? Math.max(...vals) : 0) + "%", "best"], [range === "season" ? vals.filter((v) => v >= WIN_PCT).length + " wks" : vals.filter((v) => v >= WIN_PCT).length + " days", "won"]].map(([v, l]) => (
+                {(range === "all"
+                  ? [[stats.allTime.avg + "%", "average"], [stats.allTime.best + "%", "best day"], [stats.allTime.wins + " days", "won"]]
+                  : [[mean(vals) + "%", "average"], [(vals.length ? Math.max(...vals) : 0) + "%", "best"], [range === "season" ? vals.filter((v) => v >= WIN_PCT).length + " wks" : vals.filter((v) => v >= WIN_PCT).length + " days", "won"]]).map(([v, l]) => (
                   <div key={l} className="rounded-xl bg-black py-2"><p className="text-lg font-bold text-red-500">{v}</p><p className="text-[11px] text-neutral-500">{l}</p></div>
                 ))}
               </div>
+              {range === "all" && <p className="mt-2 text-xs text-neutral-500">{stats.allTime.days} {stats.allTime.days === 1 ? "day" : "days"} tracked since {new Date(stats.firstDay + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}. The chart shows {stats.chart.all.length > 0 && stats.allTime.days <= 140 ? "weekly" : "monthly"} averages.</p>}
             </Card>
 
             <Card title="Habit consistency" icon={Check}>
@@ -960,25 +995,69 @@ export default function LifeArc() {
                     <span className="text-sm text-neutral-400">{curT.unit}</span>
                   </span>
                 </div>
-                <div className="mb-2 flex items-center justify-between">
-                  <button onClick={() => setWkOff((x) => x - 1)} disabled={wkOff <= -17} aria-label="Previous week" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronLeft size={16} /></button>
-                  <span className="text-sm font-semibold text-neutral-200">{wkLabel}</span>
-                  <button onClick={() => setWkOff((x) => Math.min(0, x + 1))} disabled={wkOff === 0} aria-label="Next week" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronRight size={16} /></button>
+                <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+                  {[["week", "This week"], ["month", "This month"], ["season", SE.name]].map(([id, l]) => (
+                    <button key={id} onClick={() => setTRange(id)} aria-pressed={tRange === id} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${tRange === id ? "bg-red-600 text-white" : "border border-neutral-700 text-neutral-300"}`}>{l}</button>
+                  ))}
                 </div>
-                <LineChart points={tWeek.map((w) => ({ l: w.day, v: w.v }))} max={tTop} ticks={[0, +(tTop / 2).toFixed(1), tTop]} target={curT.target} unit={curT.unit} tLabel={curT.mode === "max" ? "limit" : "goal"} showVals />
+                {tRange === "week" && (
+                  <div className="mb-2 flex items-center justify-between">
+                    <button onClick={() => setWkOff((x) => x - 1)} disabled={wkOff <= -17} aria-label="Previous week" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronLeft size={16} /></button>
+                    <span className="text-sm font-semibold text-neutral-200">{wkLabel}</span>
+                    <button onClick={() => setWkOff((x) => Math.min(0, x + 1))} disabled={wkOff === 0} aria-label="Next week" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronRight size={16} /></button>
+                  </div>
+                )}
+                {tRange === "month" && (
+                  <div className="mb-2 flex items-center justify-between">
+                    <button onClick={() => setMoOff((x) => x - 1)} disabled={!canPrevM} aria-label="Previous month" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronLeft size={16} /></button>
+                    <span className="text-sm font-semibold text-neutral-200">{mLabel}</span>
+                    <button onClick={() => setMoOff((x) => Math.min(0, x + 1))} disabled={moOff === 0} aria-label="Next month" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronRight size={16} /></button>
+                  </div>
+                )}
+                {tRange === "season" && <p className="mb-2 text-center text-sm font-semibold text-neutral-200">{SE.name} · day {dayN} of {sLen}</p>}
+                <LineChart points={tPts} max={tTop} ticks={[0, +(tTop / 2).toFixed(1), tTop]} target={curT.target} unit={curT.unit} tLabel={curT.mode === "max" ? "limit" : "goal"} showVals={tRange === "week"} />
                 <p className="mt-2 text-xs text-neutral-500">
-                  Average {tAvg}{curT.unit}. {tLogged.filter((w) => tOk(w.v)).length} of {tLogged.length} logged days {curT.mode === "max" ? "within the limit" : "hit the goal"}.
+                  Average {tAvg}{curT.unit}. {tHits} of {tLogged.length} logged days {curT.mode === "max" ? "within the limit" : "hit the goal"}.
                   {curT.id === "screen" && " A web app can't read phone screen time, so copy it from Digital Wellbeing."}
                   {curT.id === "sleep" && " Enter the hours you slept each night. Change the goal above any time."}
                   {bk?.key ? " Saved to your cloud backup." : " Turn on cloud backup in your profile to keep this safe."}
                 </p>
-                <div className="mt-3 grid grid-cols-7 gap-1.5">
-                  {tWeek.map((w) => (
-                    <label key={w.key} className={`text-center text-[10px] ${w.today ? "font-bold text-red-400" : "text-neutral-500"}`}>{w.today ? "Today" : wkOff === 0 ? w.day : `${w.day} ${+w.key.slice(8)}`}
-                      <input type="number" inputMode="decimal" step="0.5" min="0" placeholder="–" value={w.v ?? ""} disabled={w.future} onChange={(e) => setTV(w.key, e.target.value)} className={`mt-1 w-full rounded-lg border bg-black py-2 text-center text-sm outline-none focus:border-red-500 disabled:opacity-30 ${w.today ? "border-red-500 text-white" : "border-neutral-700 text-neutral-100"}`} />
-                    </label>
-                  ))}
-                </div>
+                {tRange === "week" && (
+                  <div className="mt-3 grid grid-cols-7 gap-1.5">
+                    {tWeek.map((w) => (
+                      <label key={w.key} className={`text-center text-[10px] ${w.today ? "font-bold text-red-400" : "text-neutral-500"}`}>{w.today ? "Today" : wkOff === 0 ? w.day : `${w.day} ${+w.key.slice(8)}`}
+                        <input type="number" inputMode="decimal" step="0.5" min="0" placeholder="–" value={w.v ?? ""} disabled={w.future} onChange={(e) => setTV(w.key, e.target.value)} className={`mt-1 w-full rounded-lg border bg-black py-2 text-center text-sm outline-none focus:border-red-500 disabled:opacity-30 ${w.today ? "border-red-500 text-white" : "border-neutral-700 text-neutral-100"}`} />
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {tRange === "month" && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] text-neutral-500">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <span key={d}>{d}</span>)}</div>
+                    <div className="mt-1 grid grid-cols-7 gap-1.5">
+                      {Array.from({ length: mCells[0].col }, (_, i) => <span key={`b${i}`} />)}
+                      {mCells.map((c) => (
+                        <label key={c.key} className={`text-center text-[10px] ${c.today ? "font-bold text-red-400" : "text-neutral-500"}`}>{c.n}
+                          <input type="number" inputMode="decimal" step="0.5" min="0" placeholder="–" value={tVals[c.key] ?? ""} disabled={c.future} onChange={(e) => setTV(c.key, e.target.value)} className={`mt-0.5 w-full rounded-md border bg-black py-1.5 text-center text-xs outline-none focus:border-red-500 disabled:opacity-30 ${c.today ? "border-red-500 text-white" : "border-neutral-700 text-neutral-100"}`} />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {tRange === "season" && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      {sMonths.map((m) => (
+                        <div key={m.m} className="rounded-xl bg-black p-3 text-center">
+                          <p className="text-xs text-neutral-500">{m.name}</p>
+                          <p className="mt-1 text-lg font-bold text-red-500">{m.avg == null ? "–" : `${m.avg}${curT.unit}`}</p>
+                          <p className="text-[10px] text-neutral-600">{m.n} days logged</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-neutral-500">Whole season so far. To change a day, open This week or This month.</p>
+                  </div>
+                )}
               </>
             )}
           </Card>

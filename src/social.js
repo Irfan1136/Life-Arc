@@ -6,6 +6,7 @@ import {
   onSnapshot, runTransaction, serverTimestamp,
 } from "firebase/firestore";
 import { firebaseConfig, configured } from "./firebase-config.js";
+import * as store from "./store.js";
 
 export { configured };
 const ALPHA = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; // no 0/O/1/I
@@ -60,14 +61,14 @@ const dayStamp = () => { const d = new Date(); return `${d.getFullYear()}-${d.ge
 export async function saveBackup(key, json) {
   await boot();
   let last = "";
-  try { last = localStorage.getItem("la:bkprev") || ""; } catch { /* ignore */ }
+  try { last = store.get("la:bkprev") || ""; } catch { /* ignore */ }
   if (last !== dayStamp()) {
     try {
       const cur = await getDoc(doc(db, "backups", key));
       if (cur.exists() && typeof cur.data().json === "string") {
         await setDoc(doc(db, "backups", key + "_prev"), { json: cur.data().json, updatedAt: serverTimestamp() });
       }
-      try { localStorage.setItem("la:bkprev", dayStamp()); } catch { /* ignore */ }
+      try { store.set("la:bkprev", dayStamp()); } catch { /* ignore */ }
     } catch { /* the older copy is a bonus: never block the main backup */ }
   }
   await setDoc(doc(db, "backups", key), { json, updatedAt: serverTimestamp() });
