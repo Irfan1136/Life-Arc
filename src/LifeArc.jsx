@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Moon, Brain, Dumbbell, Droplets, Apple, BookOpen, Smartphone, Snowflake, Pencil, ClipboardCheck,
-  Flame, CalendarDays, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users,
+  Flame, CalendarDays, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { useChallenge, ChallengeTab, InviteAlert } from "./Challenge.jsx";
 import * as S from "./social.js";
@@ -211,6 +211,7 @@ export default function LifeArc() {
   const [tune, setTune] = useState("chime");
   const [days, setDays] = useState([]);
   const [trk, setTrk] = useState("sleep");
+  const [wkOff, setWkOff] = useState(0); // 0 = this week, -1 = last week ...
   const [addingT, setAddingT] = useState(false);
   const [nt, setNt] = useState({ name: "", unit: "h", target: "1", mode: "min" });
   const [gIn, setGIn] = useState({});
@@ -219,7 +220,7 @@ export default function LifeArc() {
   const [ringMsg, setRingMsg] = useState("");
   const [seaF, setSeaF] = useState("year");
   const [rel, setRel] = useState({ exact: "unknown", battery: null });
-  const [relMsg, setRelMsg] = useState("");
+  const [fs, setFs] = useState(true); // may the alarm open over other apps / the lock screen
   const [showDays, setShowDays] = useState(false); // the previous-dates strip is hidden until you tap the button
   const [viewDay, setViewDay] = useState(null); // null = today; otherwise a past day you are checking
   const [bk, setBk] = useState(() => { try { return JSON.parse(localStorage.getItem(BKKEY)); } catch { return null; } });
@@ -289,10 +290,10 @@ export default function LifeArc() {
   // can the phone ring alarms with the app closed? exact alarms allowed + no battery limit
   const readRel = async () => {
     if (!window.__LN) return;
-    let exact = "unknown", battery = null;
-    try { const r = await window.__LN.checkExactNotificationSetting(); exact = r.exact_alarm === "granted" ? "granted" : "denied"; } catch { /* older Android */ }
+    let battery = null;
     try { const r = await window.__RP.batteryStatus(); battery = !!r.unrestricted; } catch { /* unknown */ }
-    setRel({ exact, battery });
+    setRel({ exact: "granted", battery });
+    try { const r = await window.__AL.fullScreen(); setFs(!!r.allowed); } catch { /* older Android */ }
   };
   useEffect(() => {
     readRel();
@@ -300,16 +301,17 @@ export default function LifeArc() {
     document.addEventListener("visibilitychange", v);
     return () => document.removeEventListener("visibilitychange", v);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const testBg = async () => {
-    try {
-      const LN = window.__LN;
-      const p = await LN.requestPermissions();
-      if (p.display !== "granted") { setRelMsg("Allow notifications first."); return; }
-      try { await LN.createChannel({ id: "reminders", name: "Daily reminders", description: "Reminds you to fill your tasks", importance: 4, vibration: true }); } catch { /* default */ }
-      await LN.schedule({ notifications: [{ id: 2000000010, title: "Life Arc", body: "Test OK: this notification came with the app closed.", channelId: "reminders", schedule: { at: new Date(Date.now() + 60000), allowWhileIdle: true } }] });
-      setRelMsg("Test set. Now swipe Life Arc away from Recent apps and wait 1 minute. If the notification does not come, your phone is stopping the app: do the steps above.");
-    } catch { setRelMsg("Could not set the test. Check that notifications are allowed."); }
-  };
+  // Android: hand the alarm list to the phone's own alarm engine. It rings over other apps and the lock screen
+  // with Snooze and Stop, even when the app is closed, and books itself again after a restart.
+  useEffect(() => {
+    if (!window.__AL) return;
+    const items = data.alarms.filter((x) => x.armed).map((a) => {
+      const rg = a.tune?.startsWith("custom:") ? dataRef.current.rings.find((r) => `custom:${r.id}` === a.tune) : null;
+      const tn = TUNES.some((t) => t.id === a.tune) ? a.tune : "chime";
+      return { id: String(a.id), time: a.time, days: a.days || [], label: label(a.habit), uri: rg?.uri || rawUri(tn), armed: true };
+    });
+    window.__AL.sync({ alarms: items }).catch(() => {});
+  }, [data.alarms, data.rings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // native background alarms (Android app only)
   useEffect(() => {
@@ -323,7 +325,7 @@ export default function LifeArc() {
         const pend = await LN.getPending();
         if (pend.notifications.length) await LN.cancel({ notifications: pend.notifications });
         const list = [];
-        for (const a of data.alarms.filter((x) => x.armed)) {
+        for (const a of window.__AL ? [] : data.alarms.filter((x) => x.armed)) {
           const [h, m] = a.time.split(":").map(Number);
           const rg = a.tune?.startsWith("custom:") ? dataRef.current.rings.find((r) => `custom:${r.id}` === a.tune) : null;
           const tn = TUNES.some((t) => t.id === a.tune) ? a.tune : "chime";
@@ -355,6 +357,7 @@ export default function LifeArc() {
 
   // in-app alarm check: chosen weekdays (or every day), once per day, plus snoozed alarms
   useEffect(() => {
+    if (window.__AL) return; // the phone rings alarms itself in the Android app
     const hm = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
     const due = snoozes.find((x) => x.at <= now.getTime());
     if (due) { setSnoozes((q) => q.filter((x) => x !== due)); setAlert(due.alarm); return; }
@@ -575,8 +578,11 @@ export default function LifeArc() {
   const consList = [...stats.cons[range]].sort((a, b) => a.p - b.p);
 
   // this calendar week, Monday to Sunday (used by Track, including Sleep). Today is marked, future days are locked.
-  const wkStart = addDays(now, -((now.getDay() + 6) % 7));
-  const week = span(wkStart, 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }), today: dk(d) === today, future: dk(d) > today || dk(d) < winStart }));
+  const trackFloor = dk(addDays(now, -120));
+  const wkStart = addDays(now, -((now.getDay() + 6) % 7) + wkOff * 7);
+  const wkEnd = addDays(wkStart, 6), mon = (d) => d.toLocaleDateString(undefined, { month: "short" });
+  const wkLabel = wkOff === 0 ? "This week" : wkOff === -1 ? "Last week" : `${wkStart.getDate()} ${mon(wkStart)} - ${wkEnd.getDate()} ${mon(wkEnd)}`;
+  const week = span(wkStart, 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }), today: dk(d) === today, future: dk(d) > today || dk(d) < trackFloor }));
 
   // tracks + monthly goals
   const curT = data.trackers.find((t) => t.id === trk) || data.trackers[0];
@@ -664,8 +670,15 @@ export default function LifeArc() {
   const syncPayload = useMemo(() => {
     const since = Object.keys(data.logs).sort()[0] || today, from = [periods.season[0], periods.week[0]].sort()[0], days = {};
     new Set([...periods.season, ...periods.week]).forEach((k) => { if (k >= since && k <= today && k >= from) days[k] = pctOf(k); });
-    return { since, days };
-  }, [data.logs, data.habits, data.hv, data.pct, periods, today]); // eslint-disable-line react-hooks/exhaustive-deps
+    // sleep and screen time of the last 14 days, shown under each person in Challenge
+    const last14 = span(addDays(new Date(today + "T00:00:00"), -13), 14).map(dk), tracks = {};
+    data.trackers.filter((t) => t.id === "sleep" || t.id === "screen").forEach((t) => {
+      const src = (t.id === "sleep" ? data.sleep : data.tracks[t.id]) || {}, v = {};
+      last14.forEach((k) => { if (src[k] != null) v[k] = src[k]; });
+      tracks[t.id] = { u: t.unit, g: t.target, m: t.mode, v };
+    });
+    return { since, days, tracks };
+  }, [data.logs, data.habits, data.hv, data.pct, data.sleep, data.tracks, data.trackers, periods, today]); // eslint-disable-line react-hooks/exhaustive-deps
   const ch = useChallenge({ name: data.profile.name.trim(), payload: syncPayload });
   const setProf = (patch) => setData((d) => ({ ...d, profile: { ...d.profile, ...patch } }));
   const inp = "mt-1 w-full rounded-lg border border-neutral-700 bg-black px-3 py-2.5 text-sm text-neutral-100 outline-none focus:border-red-500";
@@ -947,15 +960,21 @@ export default function LifeArc() {
                     <span className="text-sm text-neutral-400">{curT.unit}</span>
                   </span>
                 </div>
+                <div className="mb-2 flex items-center justify-between">
+                  <button onClick={() => setWkOff((x) => x - 1)} disabled={wkOff <= -17} aria-label="Previous week" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronLeft size={16} /></button>
+                  <span className="text-sm font-semibold text-neutral-200">{wkLabel}</span>
+                  <button onClick={() => setWkOff((x) => Math.min(0, x + 1))} disabled={wkOff === 0} aria-label="Next week" className="rounded-lg border border-neutral-700 p-1.5 text-neutral-300 active:bg-neutral-800 disabled:opacity-30"><ChevronRight size={16} /></button>
+                </div>
                 <LineChart points={tWeek.map((w) => ({ l: w.day, v: w.v }))} max={tTop} ticks={[0, +(tTop / 2).toFixed(1), tTop]} target={curT.target} unit={curT.unit} tLabel={curT.mode === "max" ? "limit" : "goal"} showVals />
                 <p className="mt-2 text-xs text-neutral-500">
                   Average {tAvg}{curT.unit}. {tLogged.filter((w) => tOk(w.v)).length} of {tLogged.length} logged days {curT.mode === "max" ? "within the limit" : "hit the goal"}.
                   {curT.id === "screen" && " A web app can't read phone screen time, so copy it from Digital Wellbeing."}
                   {curT.id === "sleep" && " Enter the hours you slept each night. Change the goal above any time."}
+                  {bk?.key ? " Saved to your cloud backup." : " Turn on cloud backup in your profile to keep this safe."}
                 </p>
                 <div className="mt-3 grid grid-cols-7 gap-1.5">
                   {tWeek.map((w) => (
-                    <label key={w.key} className={`text-center text-[10px] ${w.today ? "font-bold text-red-400" : "text-neutral-500"}`}>{w.today ? "Today" : w.day}
+                    <label key={w.key} className={`text-center text-[10px] ${w.today ? "font-bold text-red-400" : "text-neutral-500"}`}>{w.today ? "Today" : wkOff === 0 ? w.day : `${w.day} ${+w.key.slice(8)}`}
                       <input type="number" inputMode="decimal" step="0.5" min="0" placeholder="–" value={w.v ?? ""} disabled={w.future} onChange={(e) => setTV(w.key, e.target.value)} className={`mt-1 w-full rounded-lg border bg-black py-2 text-center text-sm outline-none focus:border-red-500 disabled:opacity-30 ${w.today ? "border-red-500 text-white" : "border-neutral-700 text-neutral-100"}`} />
                     </label>
                   ))}
@@ -995,8 +1014,8 @@ export default function LifeArc() {
               <p className="text-xs text-neutral-400">Some phones stop apps in the background. Turn these on once so alarms and the 11:00 / 6:00 reminders come on time.</p>
               <ul className="mt-3 space-y-2 text-sm">
                 <li className="flex items-center justify-between gap-2">
-                  <span className="text-neutral-200">Exact alarms: <span className={rel.exact === "denied" ? "text-amber-400" : "text-emerald-400"}>{rel.exact === "denied" ? "not allowed" : "allowed"}</span></span>
-                  {rel.exact === "denied" && <button onClick={async () => { try { await window.__LN.changeExactNotificationSetting(); } catch { /* ignore */ } }} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Allow</button>}
+                  <span className="text-neutral-200">Alarm over other apps: <span className={fs ? "text-emerald-400" : "text-amber-400"}>{fs ? "allowed" : "not allowed"}</span></span>
+                  {!fs && <button onClick={() => window.__AL.openFullScreenSettings().catch(() => {})} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Allow</button>}
                 </li>
                 <li className="flex items-center justify-between gap-2">
                   <span className="text-neutral-200">Battery limit: <span className={rel.battery === false ? "text-amber-400" : "text-emerald-400"}>{rel.battery === false ? "on (may stop alarms)" : "off"}</span></span>
@@ -1008,8 +1027,6 @@ export default function LifeArc() {
                 </li>
               </ul>
               <p className="mt-2 text-xs text-neutral-500">In that screen: allow Auto-start for Life Arc, set Battery to "No restrictions", and lock Life Arc in Recent apps (long-press its card, then Lock).</p>
-              <button onClick={testBg} className="mt-3 w-full rounded-xl border border-neutral-600 py-2.5 text-sm text-neutral-200 active:bg-neutral-800">Test: notify me in 1 minute</button>
-              {relMsg && <p className="mt-2 text-xs text-neutral-300">{relMsg}</p>}
             </Card>
           )}
           <Card title="Alarms" icon={Bell}>

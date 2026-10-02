@@ -5,6 +5,7 @@ import LifeArc from "./LifeArc.jsx";
 import Splash from "./Splash.jsx";
 window.__LN = LocalNotifications;
 window.__RP = registerPlugin("RingtonePicker");
+window.__AL = registerPlugin("LifeAlarm");
 const ring = (n) => window.dispatchEvent(new CustomEvent("wa-ring", { detail: n?.extra }));
 LocalNotifications.addListener("localNotificationActionPerformed", (e) => ring(e.notification));
 LocalNotifications.addListener("localNotificationReceived", ring);

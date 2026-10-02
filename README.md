@@ -55,3 +55,11 @@ Data wipes when Android makes you uninstall before installing a new APK. That ha
 - Progress > Seasons has a filter: This season / This year / Overall (Overall adds an all-time total).
 - Alarms tab > "Ring when the app is closed": exact-alarm status, battery limit, Auto-start shortcut and a "notify me in 1 minute" test. Some phones (Xiaomi, Oppo, Realme, Vivo) stop apps in the background; allow Auto-start, set Battery to No restrictions and lock the app in Recent apps.
 - Firestore rules: no change needed.
+
+## Real alarm (Android)
+Alarms are now rung by the phone itself (AlarmManager + a foreground service), not by notifications:
+- they ring with the app closed, on the alarm volume, and loop until you act;
+- the alarm opens over other apps and the lock screen (Android 14: allow "Alarm over other apps" in the Alarms tab if it shows "not allowed");
+- the notification has Snooze 5 min and Stop buttons, and the full screen has the same two buttons;
+- they are booked again after a restart or an app update.
+Native files: native/Alarm*.java, BootReceiver.java, LifeAlarmPlugin.java. The workflow registers them in the manifest from resources/manifest-extra.xml.

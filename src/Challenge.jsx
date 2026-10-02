@@ -132,6 +132,29 @@ const Box = ({ title, icon: Icon, right, children }) => (
 const field = "w-full rounded-lg border border-neutral-700 bg-black px-3 py-2.5 text-sm text-neutral-100 outline-none focus:border-red-500";
 const btn = "rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white active:bg-red-500 disabled:opacity-50";
 
+const shift = (k, n) => { const d = new Date(k + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const mean7 = (tr, id, today) => {
+  const v = tr?.[id]?.v;
+  if (!v) return null;
+  const from = shift(today, -6), xs = Object.entries(v).filter(([k]) => k >= from && k <= today).map(([, x]) => +x);
+  return xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(1) : null;
+};
+// sleep and screen time (7-day average) under a person's percentage
+const TrackLine = ({ tr, today }) => {
+  if (!tr) return <p className="mt-1.5 text-[10px] text-neutral-600">Sleep and screen time not shared yet. They need the latest app.</p>;
+  const items = [["sleep", "Sleep"], ["screen", "Screen"]].map(([id, l]) => {
+    const a = mean7(tr, id, today);
+    return a == null ? null : { l, a, u: tr[id].u, ok: tr[id].m === "max" ? a <= tr[id].g : a >= tr[id].g };
+  }).filter(Boolean);
+  if (!items.length) return <p className="mt-1.5 text-[10px] text-neutral-600">No sleep or screen time logged in the last 7 days.</p>;
+  return (
+    <p className="mt-1.5 flex flex-wrap items-center gap-x-3 text-xs">
+      {items.map((i) => <span key={i.l} className="text-neutral-400">{i.l} <b className={i.ok ? "text-emerald-400" : "text-amber-400"}>{i.a}{i.u}</b></span>)}
+      <span className="text-[10px] text-neutral-600">7-day average</span>
+    </p>
+  );
+};
+
 export function ChallengeTab({ ch, name, setName, periods, today, payload, seasonName }) {
   const [flt, setFlt] = useState("week");
   const [idIn, setIdIn] = useState("");
@@ -139,33 +162,61 @@ export function ChallengeTab({ ch, name, setName, periods, today, payload, seaso
   const [copied, setCopied] = useState(false);
   const [ok, setOk] = useState("");
 
+  const labels = { today: "Today", week: "Week", month: "Month", season: seasonName };
+  const caption = { today: "Share of habits done today.", week: "Average of the last 7 days.", month: "Average of this month so far.", season: `Average of ${seasonName} so far.` }[flt];
+  const myVal = avg(payload.days, payload.since, periods[flt], today);
+
+  // MAIN: my own percentage is always the first thing here, with or without friends
+  const hero = (
+    <Box title="My progress" icon={Trophy}>
+      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+        {Object.entries(labels).map(([id, l]) => (
+          <button key={id} onClick={() => setFlt(id)} aria-pressed={flt === id} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${flt === id ? "bg-red-600 text-white" : "border border-neutral-700 text-neutral-300"}`}>{l}</button>
+        ))}
+      </div>
+      <p className="text-5xl font-black tabular-nums text-red-500">{myVal == null ? "–" : `${myVal}%`}</p>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full rounded-full bg-red-500 transition-all duration-500" style={{ width: `${myVal ?? 0}%` }} /></div>
+      <p className="mt-2 text-xs text-neutral-500">{caption} Missed days count as 0%.</p>
+      <TrackLine tr={payload.tracks} today={today} />
+    </Box>
+  );
+
   if (!S.configured()) {
     return (
-      <Box title="Challenge" icon={Users}>
-        <p className="text-sm text-neutral-300">Challenge is not set up yet. Add your Firebase config in <span className="text-red-400">src/firebase-config.js</span>, then build the app again.</p>
-      </Box>
+      <>
+        {hero}
+        <Box title="Challenge" icon={Users}>
+          <p className="text-sm text-neutral-300">Challenge is not set up yet. Add your Firebase config in <span className="text-red-400">src/firebase-config.js</span>, then build the app again.</p>
+        </Box>
+      </>
     );
   }
   if (!ch.on) {
     return (
-      <Box title="Challenge your friends" icon={Users}>
-        <p className="text-sm text-neutral-300">Compare your daily progress with up to {MAX_FRIENDS} friends. Friends see only your daily percentage, never your habit names. A friend appears only after they accept.</p>
-        {!name.trim() && (
-          <label className="mt-3 block text-xs text-neutral-400">Your name (friends see this)
-            <input value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Your name" className={`mt-1 ${field}`} />
-          </label>
-        )}
-        <button onClick={ch.enable} disabled={!name.trim()} className={`mt-3 w-full ${btn}`}>Turn on Challenge</button>
-      </Box>
+      <>
+        {hero}
+        <Box title="Challenge your friends" icon={Users}>
+          <p className="text-sm text-neutral-300">Compare with up to {MAX_FRIENDS} friends. Friends see your daily percentage and your sleep and screen-time averages, never your habit names. A friend appears only after they accept.</p>
+          {!name.trim() && (
+            <label className="mt-3 block text-xs text-neutral-400">Your name (friends see this)
+              <input value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Your name" className={`mt-1 ${field}`} />
+            </label>
+          )}
+          <button onClick={ch.enable} disabled={!name.trim()} className={`mt-3 w-full ${btn}`}>Turn on Challenge</button>
+        </Box>
+      </>
     );
   }
   if (ch.st !== "ready") {
     return (
-      <Box title="Challenge" icon={Users}>
-        {ch.st === "error"
-          ? (<><p className="text-sm text-red-400">{ch.msg}</p><button onClick={ch.retry} className={`mt-3 w-full ${btn}`}>Try again</button></>)
-          : <p className="text-sm text-neutral-400">Connecting...</p>}
-      </Box>
+      <>
+        {hero}
+        <Box title="Challenge" icon={Users}>
+          {ch.st === "error"
+            ? (<><p className="text-sm text-red-400">{ch.msg}</p><button onClick={ch.retry} className={`mt-3 w-full ${btn}`}>Try again</button></>)
+            : <p className="text-sm text-neutral-400">Connecting...</p>}
+        </Box>
+      </>
     );
   }
 
@@ -176,35 +227,34 @@ export function ChallengeTab({ ch, name, setName, periods, today, payload, seaso
     const r = await ch.invite(idIn);
     if (r) { setIdIn(""); setOk(r === "accepted" ? "Connected. They had already invited you." : "Invite sent. It shows up for your friend once they open Challenge."); } else setOk("");
   };
-  const rows = [{ key: "me", name: name || "You", you: true, v: (k) => avg(payload.days, payload.since, k, today) },
-    ...ch.friends.map((f) => ({ key: f.uid, name: f.prog?.name || f.name, linkId: f.linkId, sync: ago(f.prog?.updatedAt), v: (k) => avg(f.prog?.days, f.prog?.since, k, today) }))]
-    .map((r) => ({ ...r, val: r.v(periods[flt]) }))
+  const rows = [{ key: "me", name: name || "You", you: true, tr: payload.tracks, val: myVal },
+    ...ch.friends.map((f) => ({ key: f.uid, name: f.prog?.name || f.name, linkId: f.linkId, sync: ago(f.prog?.updatedAt), tr: f.prog?.tracks, val: avg(f.prog?.days, f.prog?.since, periods[flt], today), got: !!f.prog }))]
     .sort((a, b) => (b.val ?? -1) - (a.val ?? -1));
-  const caption = { today: "Share of habits done today.", week: "Average of the last 7 days.", month: "Average of this month so far.", season: `Average of ${seasonName} so far.` }[flt];
 
   return (
     <>
-      <Box title="Your ID" icon={Users}>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-2xl font-black tracking-wider text-red-500">{code}</p>
-          <button onClick={copy} className="flex items-center gap-1 rounded-lg border border-neutral-700 px-3 py-2 text-sm text-neutral-300 active:bg-neutral-800">{copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}</button>
-        </div>
-        <p className="mt-2 text-xs text-neutral-500">Friends type this ID in their Challenge tab to connect with you.</p>
-      </Box>
+      {hero}
 
-      <Box title={`Add a friend (${ch.used}/${MAX_FRIENDS})`} icon={UserPlus}>
-        <div className="flex gap-2">
-          <input value={idIn} onChange={(e) => setIdIn(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendId()} placeholder="Friend's ID, e.g. LA-7K4Q9X" autoCapitalize="characters" className={field} />
-          <button onClick={sendId} disabled={ch.busy || full} className={btn}>Invite</button>
-        </div>
-        <p className="mt-3 text-xs text-neutral-400">No ID yet? Send your ID on WhatsApp:</p>
-        <div className="mt-1 flex gap-2">
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Friend's phone" className={field} />
-          <a href={waUrl(phone, inviteText(name, code))} target="_blank" rel="noopener noreferrer" className="flex shrink-0 items-center gap-1 rounded-xl border border-red-500 px-4 text-sm font-semibold text-red-400 active:bg-red-500/10"><Send size={14} /> WhatsApp</a>
-        </div>
-        {full && <p className="mt-2 text-xs text-amber-400">You have 6 friends. Remove one to add another.</p>}
-        {ch.msg && <p className="mt-2 text-xs text-red-400">{ch.msg}</p>}
-        {!ch.msg && ok && <p className="mt-2 text-xs text-emerald-400">{ok}</p>}
+      <Box title={`Comparison: ${labels[flt]}`} icon={Users}>
+        <ul className="space-y-2">
+          {rows.map((r, i) => (
+            <li key={r.key} className={`rounded-xl border px-3 py-2 ${r.you ? "border-red-500/60 bg-red-950/20" : "border-neutral-800 bg-black"}`}>
+              <div className="flex items-center gap-2">
+                <span className="w-5 text-center text-sm font-bold text-neutral-500">{i === 0 && r.val != null && rows.length > 1 ? <Trophy size={16} className="text-amber-400" /> : i + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-neutral-100">{r.name}{r.you && <span className="ml-1 text-xs text-red-400">(You)</span>}</span>
+                <span className="text-lg font-bold tabular-nums text-red-500">{r.val == null ? "–" : `${r.val}%`}</span>
+                {!r.you && <button onClick={() => window.confirm(`Remove ${r.name}? You will stop seeing each other's progress.`) && ch.remove(r.linkId)} aria-label={`Remove ${r.name}`} className="text-neutral-600 hover:text-red-500"><X size={16} /></button>}
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full rounded-full bg-red-500 transition-all duration-500" style={{ width: `${r.val ?? 0}%` }} /></div>
+              <TrackLine tr={r.tr} today={today} />
+              {r.sync && <p className="mt-1 text-[10px] text-neutral-600">updated {r.sync}</p>}
+              {!r.you && !r.got && <p className="mt-1 text-[10px] text-amber-500">Waiting for {r.name}'s data. They need to open Life Arc once with internet and have Challenge turned on.</p>}
+              {!r.you && r.got && r.val == null && <p className="mt-1 text-[10px] text-amber-500">{r.name} has no percentage for this period yet.</p>}
+            </li>
+          ))}
+        </ul>
+        {ch.pushErr && <p className="mt-3 text-xs text-red-400">Your percentage could not be uploaded, so friends cannot see it. {ch.pushErr}</p>}
+        {ch.friends.length === 0 && <p className="mt-3 text-sm text-neutral-500">No friends yet. Invite one below to start comparing. You can begin with just 1 friend.</p>}
       </Box>
 
       {(ch.incoming.length > 0 || ch.outgoing.length > 0) && (
@@ -229,30 +279,27 @@ export function ChallengeTab({ ch, name, setName, periods, today, payload, seaso
         </Box>
       )}
 
-      <Box title="Comparison" icon={Trophy}>
-        <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-          {[["today", "Today"], ["week", "Week"], ["month", "Month"], ["season", seasonName]].map(([id, l]) => (
-            <button key={id} onClick={() => setFlt(id)} aria-pressed={flt === id} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${flt === id ? "bg-red-600 text-white" : "border border-neutral-700 text-neutral-300"}`}>{l}</button>
-          ))}
+      <Box title={`Add a friend (${ch.used}/${MAX_FRIENDS})`} icon={UserPlus}>
+        <div className="flex gap-2">
+          <input value={idIn} onChange={(e) => setIdIn(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendId()} placeholder="Friend's ID, e.g. LA-7K4Q9X" autoCapitalize="characters" className={field} />
+          <button onClick={sendId} disabled={ch.busy || full} className={btn}>Invite</button>
         </div>
-        <ul className="space-y-2">
-          {rows.map((r, i) => (
-            <li key={r.key} className={`rounded-xl border px-3 py-2 ${r.you ? "border-red-500/60 bg-red-950/20" : "border-neutral-800 bg-black"}`}>
-              <div className="flex items-center gap-2">
-                <span className="w-5 text-center text-sm font-bold text-neutral-500">{i === 0 && r.val != null ? <Trophy size={16} className="text-amber-400" /> : i + 1}</span>
-                <span className="min-w-0 flex-1 truncate text-sm text-neutral-100">{r.name}{r.you && <span className="ml-1 text-xs text-red-400">(You)</span>}</span>
-                <span className="text-lg font-bold tabular-nums text-red-500">{r.val == null ? "–" : `${r.val}%`}</span>
-                {!r.you && <button onClick={() => window.confirm(`Remove ${r.name}? You will stop seeing each other's progress.`) && ch.remove(r.linkId)} aria-label={`Remove ${r.name}`} className="text-neutral-600 hover:text-red-500"><X size={16} /></button>}
-              </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full rounded-full bg-red-500 transition-all duration-500" style={{ width: `${r.val ?? 0}%` }} /></div>
-              {r.sync && <p className="mt-1 text-[10px] text-neutral-600">updated {r.sync}</p>}
-              {!r.you && r.val == null && <p className="mt-1 text-[10px] text-amber-500">No percentage yet. Ask {r.name} to open Life Arc once with internet (both phones need the latest app).</p>}
-            </li>
-          ))}
-        </ul>
-        {ch.pushErr && <p className="mb-3 text-xs text-red-400">Your percentage could not be uploaded, so friends cannot see it. {ch.pushErr}</p>}
-        {ch.friends.length === 0 && <p className="mt-3 text-sm text-neutral-500">No friends yet. Invite one to start comparing. You can begin with just 1 friend.</p>}
-        <p className="mt-3 text-xs text-neutral-500">{caption} Days before someone started do not count; missed days count as 0%.</p>
+        <p className="mt-3 text-xs text-neutral-400">No ID yet? Send your ID on WhatsApp:</p>
+        <div className="mt-1 flex gap-2">
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Friend's phone" className={field} />
+          <a href={waUrl(phone, inviteText(name, code))} target="_blank" rel="noopener noreferrer" className="flex shrink-0 items-center gap-1 rounded-xl border border-red-500 px-4 text-sm font-semibold text-red-400 active:bg-red-500/10"><Send size={14} /> WhatsApp</a>
+        </div>
+        {full && <p className="mt-2 text-xs text-amber-400">You have 6 friends. Remove one to add another.</p>}
+        {ch.msg && <p className="mt-2 text-xs text-red-400">{ch.msg}</p>}
+        {!ch.msg && ok && <p className="mt-2 text-xs text-emerald-400">{ok}</p>}
+      </Box>
+
+      <Box title="Your ID" icon={Users}>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-2xl font-black tracking-wider text-red-500">{code}</p>
+          <button onClick={copy} className="flex items-center gap-1 rounded-lg border border-neutral-700 px-3 py-2 text-sm text-neutral-300 active:bg-neutral-800">{copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}</button>
+        </div>
+        <p className="mt-2 text-xs text-neutral-500">Friends type this ID in their Challenge tab to connect with you.</p>
       </Box>
       <button onClick={ch.disable} className="w-full py-2 text-xs text-neutral-600 underline">Turn off Challenge on this phone</button>
     </>
