@@ -33,3 +33,19 @@ Friends see only daily percentages, only after they accept. Max 6 friends per pe
 - Firestore rules: **no change needed** for auto backup or the older copy (they use the same `backups` section and fields). If you have never published the current `firestore.rules`, publish it once or backup shows "Firebase blocked this".
 - Today tab: tap any of the last 14 days to check or fix that day's habits.
 - Not backed up: custom ringtone files (local to the phone) and Challenge friends (a reinstall creates a new Challenge ID, so add friends again).
+
+## Never lose data on update (do this once)
+Data wipes when Android makes you uninstall before installing a new APK. That happens when the APK is signed with a different key each build. Add the two secrets from `SIGNING-SECRETS.txt` (GitHub repo > Settings > Secrets and variables > Actions) and every build uses the same key, so updates install over the old app and keep everything. The first time you switch to this key you must uninstall once, so turn on Auto backup and wait for "Last saved ... ago" first, then Restore after installing.
+
+## Firebase checklist if backup says "Firebase blocked this"
+1. Firebase console > Build > **Firestore Database** > **Rules** tab (not Realtime Database, not Storage). Make sure the database shown is `(default)`.
+2. Select all, paste `firestore.rules`, click **Publish**. The "Last published" time must change. Wait 1 minute.
+3. Build > Authentication > Sign-in method > **Anonymous** must be Enabled.
+
+## v5 changes
+- Only today and the previous 3 days can be edited (Today tab ticks and Track entries). Older days are locked.
+- Every day's score is saved (`pct`, with the number of habits that day). Editing the habit list later never changes an old percentage, a winning day or the streak. All of it is inside the auto backup (progress, tracks, sleep goals, alarms, profile, ringtone names).
+- Daily reminders at 11:00 AM and 6:00 PM ("fill your tasks"). Switch in the Alarms tab. Android app only.
+- The restore sheet opens only on a fresh install (no data, no backup yet). Restore, or "I'm new" to start auto backup, or Skip. It never comes back after that. Backup settings stay in Profile.
+- Restore works any number of times, on any day: same phone number + same PIN, no OTP, no SMS cost.
+- Firestore rules: no change needed in v5.

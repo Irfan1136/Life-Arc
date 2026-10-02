@@ -142,7 +142,7 @@ export const msg = (e) => {
     already: "You are already in a challenge with this friend.",
     pending: "Invite already sent. Waiting for your friend to accept.",
     full: "You already have 6 friends.",
-    "permission-denied": "Firebase blocked this. Open Firestore, Rules, paste firestore.rules from the project, and click Publish.",
+    "permission-denied": "Firebase blocked this (permission-denied). In Firebase open Build > Firestore Database > Rules tab (not Realtime Database, not Storage), select all, paste firestore.rules, click Publish, wait 1 minute, then try again.",
     "not-found": "The Firestore database is not created yet. In Firebase open Firestore Database and click Create database.",
     unavailable: "Cannot reach Firebase. Check your internet. If it is fine, make sure the Firestore database was created.",
     "auth/network-request-failed": "No internet. Try again when you are online.",

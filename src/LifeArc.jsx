@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Moon, Brain, Dumbbell, Droplets, Apple, BookOpen, Smartphone, Snowflake, Pencil, ClipboardCheck,
-  Flame, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users,
+  Flame, CalendarDays, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users,
 } from "lucide-react";
 import { useChallenge, ChallengeTab, InviteAlert } from "./Challenge.jsx";
 import * as S from "./social.js";
 import logo from "./logo.png";
 
 const KEY = "winterArc:v1";
+const EDIT_BACK = 3; // today + the previous 3 days can be edited; older days are locked
+const SETKEY = "la:setup";
 const WIN_PCT = 70; // a day is won at 70% of your habits
 const MONTH_GOAL = 0.8; // win 80% of the days in each month
 
@@ -52,7 +54,7 @@ const ageOf = (dob) => {
 };
 
 const BKKEY = "la:backup";
-const backupJson = (d) => JSON.stringify({ ...d, rings: [], v: 1 }); // ringtone files are local to the phone, so they are not backed up
+const backupJson = (d) => JSON.stringify({ ...d, v: 2 }); // everything: habits, day percentages, tracks, goals, alarms, profile
 const BKHASH = "la:bkhash", BKAT = "la:bkat"; // fingerprint of the last copy saved to the cloud, and when
 const hashOf = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return `${h}:${s.length}`; };
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: "unavailable" }), ms))]);
@@ -80,11 +82,11 @@ function load() {
     const r = JSON.parse(localStorage.getItem(KEY));
     return {
       logs: r?.logs || {}, sleep: r?.sleep || {}, alarms: (r?.alarms || []).map(fixAlarm(okRings(r?.rings))), habits: r?.habits?.length ? r.habits : DEFAULT_HABITS,
-      goals: r?.goals || {}, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
+      goals: r?.goals || {}, pct: r?.pct || {}, remind: r?.remind !== false, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
       trackers: withSleep(Array.isArray(r?.trackers) ? r.trackers : [{ ...SCREEN, target: r?.screenLimit ?? 3 }]),
       tracks: r?.tracks || (r?.screen ? { screen: r.screen } : {}),
     };
-  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {} }; }
+  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, pct: {}, remind: true, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {} }; }
 }
 
 const PKG = "com.teclipse.lifearc";
@@ -213,6 +215,7 @@ export default function LifeArc() {
   const alarmsRef = useRef([]);
   const { unlock, play } = useChime();
   const [ringMsg, setRingMsg] = useState("");
+  const [showDays, setShowDays] = useState(false); // the previous-dates strip is hidden until you tap the button
   const [viewDay, setViewDay] = useState(null); // null = today; otherwise a past day you are checking
   const [bk, setBk] = useState(() => { try { return JSON.parse(localStorage.getItem(BKKEY)); } catch { return null; } });
   const [bkPin, setBkPin] = useState("");
@@ -220,12 +223,20 @@ export default function LifeArc() {
   const [bkBusy, setBkBusy] = useState(false);
   const [bkAt, setBkAt] = useState(() => { try { return +localStorage.getItem(BKAT) || 0; } catch { return 0; } });
   const [bkFail, setBkFail] = useState("");
+  // the restore sheet opens only on a fresh install (no data, no backup set up, not skipped before)
+  const [needSetup, setNeedSetup] = useState(() => { try { return !localStorage.getItem(SETKEY) && !localStorage.getItem(BKKEY) && Object.keys(load().logs).length === 0; } catch { return false; } });
+  const skipSetup = () => { try { localStorage.setItem(SETKEY, "1"); } catch { /* ignore */ } setNeedSetup(false); setBkMsg(""); };
 
   const today = dk(now);
   const H = data.habits, n = H.length;
   const ids = H.map((h) => h.id);
-  const score = (k) => ids.filter((id) => data.logs[k]?.[id]).length;
-  const pctOf = (k) => Math.round((score(k) / n) * 100);
+  // Days older than the editable window are LOCKED: their score is the one saved when the day closed, so editing the
+  // habit list later never changes an old percentage, a winning day or the streak.
+  const winStart = dk(addDays(now, -EDIT_BACK));
+  const frozen = (k) => (k < winStart && data.pct?.[k]) || null;
+  const score = (k) => (frozen(k) ? frozen(k).s : ids.filter((id) => data.logs[k]?.[id]).length);
+  const nOf = (k) => (frozen(k) ? frozen(k).n : n);
+  const pctOf = (k) => (nOf(k) ? Math.round((score(k) / nOf(k)) * 100) : 0);
   const label = (id) => H.find((h) => h.id === id)?.label || "Habit";
   alarmsRef.current = data.alarms;
   const dataRef = useRef(data);
@@ -234,6 +245,21 @@ export default function LifeArc() {
   useEffect(() => {
     try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { /* storage blocked */ }
   }, [data]);
+
+  // save every day's score (and how many habits there were) so percentages, winning days and the streak stay fixed
+  useEffect(() => {
+    setData((d) => {
+      const hid = d.habits.map((h) => h.id), cnt = hid.length;
+      const pct = { ...(d.pct || {}) };
+      let ch = false;
+      for (const k of Object.keys(d.logs)) {
+        if (k < winStart && pct[k]) continue;
+        const sc = hid.filter((id) => d.logs[k]?.[id]).length;
+        if (!pct[k] || pct[k].s !== sc || pct[k].n !== cnt) { pct[k] = { s: sc, n: cnt }; ch = true; }
+      }
+      return ch ? { ...d, pct } : d;
+    });
+  }, [data.logs, data.habits, winStart]);
 
   // notification permission: asked on first launch in the Android app, by button in the browser
   const readPerm = async () => {
@@ -281,10 +307,15 @@ export default function LifeArc() {
           const slots = a.days?.length ? a.days.map((d) => ({ weekday: d + 1, hour: h, minute: m })) : [{ hour: h, minute: m }];
           slots.forEach((on, i) => list.push({ ...base, id: (a.id % 100000000) * 10 + i, schedule: { on, allowWhileIdle: true } }));
         }
+        if (data.remind !== false) {
+          try { await LN.createChannel({ id: "reminders", name: "Daily reminders", description: "Reminds you to fill your tasks", importance: 4, vibration: true }); } catch { /* default channel */ }
+          [[11, "Morning check-in: fill your tasks for today."], [18, "Evening check-in: fill your tasks before the day ends."]].forEach(([hr, body], i) =>
+            list.push({ id: 2000000001 + i, title: "Life Arc", body, channelId: "reminders", schedule: { on: { hour: hr, minute: 0 }, allowWhileIdle: true } }));
+        }
         if (list.length) await LN.schedule({ notifications: list });
       } catch { /* notifications unavailable */ }
     })();
-  }, [data.alarms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data.alarms, data.remind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -333,14 +364,14 @@ export default function LifeArc() {
     return () => window.removeEventListener("wa-ring", h);
   }, []);
 
-  const vd = viewDay && viewDay < today ? viewDay : today; // the day shown on the Today tab
+  const vd = viewDay && viewDay < today && viewDay >= winStart ? viewDay : today; // the day shown on the Today tab
   const vScore = score(vd);
   const vPct = pctOf(vd);
   const need = Math.ceil((n * WIN_PCT) / 100);
   const toggle = (id) => setData((d) => ({ ...d, logs: { ...d.logs, [vd]: { ...d.logs[vd], [id]: !d.logs[vd]?.[id] } } }));
   const vdDate = new Date(vd + "T00:00:00");
   const vdTitle = vd === today ? "Today's disciplines" : vd === dk(addDays(now, -1)) ? "Yesterday's disciplines" : `${DAYN[vdDate.getDay()]} ${vdDate.getDate()} ${vdDate.toLocaleDateString(undefined, { month: "short" })} disciplines`;
-  const recent = span(addDays(now, -13), 14).map(dk);
+  const recent = span(addDays(now, -EDIT_BACK), EDIT_BACK + 1).map(dk);
 
   // phone + PIN backup
   const phone10 = data.profile.phone.replace(/\D/g, "").slice(0, 10);
@@ -356,7 +387,9 @@ export default function LifeArc() {
   };
   const applyRestore = (jsonStr) => {
     const restored = JSON.parse(jsonStr);
-    try { localStorage.setItem(KEY, JSON.stringify({ ...restored, rings: dataRef.current.rings })); } catch { /* ignore */ }
+    const mine = dataRef.current.rings || [], theirs = Array.isArray(restored.rings) ? restored.rings : [];
+    const rings = [...theirs, ...mine.filter((r) => !theirs.some((x) => x.id === r.id || x.uri === r.uri))].slice(0, 10);
+    try { localStorage.setItem(KEY, JSON.stringify({ ...restored, rings })); } catch { /* ignore */ }
     setData(load());
   };
   const bkTurnOn = async () => {
@@ -454,7 +487,8 @@ export default function LifeArc() {
     while (pctOf(dk(cur)) >= WIN_PCT) { streak++; cur = addDays(cur, -1); }
 
     const span0 = Math.max(1, Math.round((new Date(today + "T00:00:00") - new Date(fk + "T00:00:00")) / 864e5) + 1);
-    const rate = keys.length ? Math.round((keys.reduce((s, k) => s + score(k), 0) / (span0 * n)) * 100) : 0;
+    let possible = 0; for (let i = 0; i < span0; i++) possible += nOf(dk(addDays(new Date(fk + "T00:00:00"), i)));
+    const rate = keys.length && possible ? Math.round((keys.reduce((s, k) => s + score(k), 0) / possible) * 100) : 0;
 
     const ys = now.getFullYear(), mo = now.getMonth();
     const sq = Math.floor(mo / 3), sStart = new Date(ys, sq * 3, 1), sDays = Math.round((new Date(ys, sq * 3 + 3, 1) - sStart) / 864e5);
@@ -488,7 +522,7 @@ export default function LifeArc() {
       return { ...se, avg: mean(vs), wins: vs.filter((v) => v >= WIN_PCT).length, days: vs.length, current: q === sq };
     });
     return { streak, rate, chart, cons, months, seasons };
-  }, [data.logs, data.habits, data.goals, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data.logs, data.habits, data.goals, data.pct, today]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pts = stats.chart[range];
   const vals = pts.map((p) => p.v).filter((v) => v != null);
@@ -496,7 +530,7 @@ export default function LifeArc() {
 
   // this calendar week, Monday to Sunday (used by Track, including Sleep). Today is marked, future days are locked.
   const wkStart = addDays(now, -((now.getDay() + 6) % 7));
-  const week = span(wkStart, 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }), today: dk(d) === today, future: dk(d) > today }));
+  const week = span(wkStart, 7).map((d) => ({ key: dk(d), day: d.toLocaleDateString(undefined, { weekday: "short" }), today: dk(d) === today, future: dk(d) > today || dk(d) < winStart }));
 
   // tracks + monthly goals
   const curT = data.trackers.find((t) => t.id === trk) || data.trackers[0];
@@ -627,34 +661,40 @@ export default function LifeArc() {
               {gItems.length > 0 && <p className="mt-1 text-sm text-neutral-200">Monthly goals: {gDone}/{gItems.length} achieved{gNext ? `. Next: ${gNext.text}` : ". All done."}</p>}
             </div>
 
-            {!bk && S.configured() && (
-              <button onClick={() => setProfOpen(true)} className="w-full rounded-2xl border border-red-500/60 bg-red-950/20 p-3 text-left text-sm text-neutral-200 active:bg-red-950/40">
-                {Object.keys(data.logs).length === 0
-                  ? <>Reinstalled the app? <span className="font-semibold text-red-400">Restore your data with your phone number</span></>
-                  : <>Auto backup is off. <span className="font-semibold text-red-400">Turn it on with your phone number</span> so a reinstall or lost phone never wipes your progress.</>}
-              </button>
-            )}
-
             <Card title={vdTitle} icon={Check} right={
               <button onClick={() => setEdit(!edit)} className="flex items-center gap-1 rounded-lg border border-neutral-700 px-2 py-1 text-xs text-neutral-300 active:bg-neutral-800">
                 {edit ? <><Check size={14} /> Done</> : <><Pencil size={14} /> Edit list</>}
               </button>}>
               {!edit && (
-                <div ref={(el) => { if (el && !el.dataset.s) { el.scrollLeft = el.scrollWidth; el.dataset.s = "1"; } }} className="mb-3 flex gap-2 overflow-x-auto pb-1" aria-label="Pick a day">
-                  {recent.map((k) => {
-                    const d = new Date(k + "T00:00:00"), sel = k === vd;
-                    return (
-                      <button key={k} onClick={() => setViewDay(k === today ? null : k)} aria-pressed={sel}
-                        className={`flex w-14 shrink-0 flex-col items-center rounded-xl border py-1.5 ${sel ? "border-red-500 bg-red-600 text-white" : "border-neutral-700 text-neutral-300 active:bg-neutral-800"}`}>
-                        <span className="text-[10px] uppercase">{k === today ? "Today" : DAYN[d.getDay()]}</span>
-                        <span className="text-base font-bold leading-tight">{d.getDate()}</span>
-                        <span className={`text-[10px] ${sel ? "text-red-100" : "text-neutral-500"}`}>{data.logs[k] ? `${pctOf(k)}%` : "–"}</span>
-                      </button>
-                    );
-                  })}
+                <div className="mb-3">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setShowDays(!showDays)} aria-expanded={showDays}
+                      className="flex items-center gap-1.5 rounded-lg border border-neutral-700 px-2.5 py-1.5 text-xs text-neutral-300 active:bg-neutral-800">
+                      <CalendarDays size={14} /> {showDays ? "Hide dates" : "Previous dates"}
+                    </button>
+                    {vd !== today && (
+                      <button onClick={() => { setViewDay(null); setShowDays(false); }}
+                        className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-semibold text-white active:bg-red-700">Back to today</button>
+                    )}
+                  </div>
+                  {showDays && (
+                    <div ref={(el) => { if (el) el.scrollLeft = el.scrollWidth; }} className="mt-2 flex gap-2 overflow-x-auto pb-1" aria-label="Pick a day">
+                      {recent.map((k) => {
+                        const d = new Date(k + "T00:00:00"), sel = k === vd;
+                        return (
+                          <button key={k} onClick={() => setViewDay(k === today ? null : k)} aria-pressed={sel}
+                            className={`flex w-14 shrink-0 flex-col items-center rounded-xl border py-1.5 ${sel ? "border-red-500 bg-red-600 text-white" : "border-neutral-700 text-neutral-300 active:bg-neutral-800"}`}>
+                            <span className="text-[10px] uppercase">{k === today ? "Today" : DAYN[d.getDay()]}</span>
+                            <span className="text-base font-bold leading-tight">{d.getDate()}</span>
+                            <span className={`text-[10px] ${sel ? "text-red-100" : "text-neutral-500"}`}>{data.logs[k] ? `${pctOf(k)}%` : "–"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
-              {!edit && vd !== today && <p className="mb-3 text-xs text-amber-400">You are editing a past day. Tap Today to go back.</p>}
+              {!edit && vd !== today && <p className="mb-3 text-xs text-amber-400">You are editing a past day ({vdDate.getDate()} {vdDate.toLocaleDateString(undefined, { month: "short" })}).</p>}
               {!edit && (
                 <div className="mb-4">
                   <div className="mb-1 flex justify-between text-xs text-neutral-400">
@@ -862,6 +902,16 @@ export default function LifeArc() {
             {perm === "denied" && <p className="text-sm text-neutral-200">Notifications are blocked. Turn them on in your phone's Settings, Apps, Life Arc, Notifications.</p>}
             {perm === "unsupported" && <p className="text-sm text-neutral-400">This browser can't show notifications. Alarms ring while this page is open.</p>}
           </div>
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
+            <div>
+              <p className="text-sm font-semibold text-neutral-200">Daily reminders</p>
+              <p className="mt-0.5 text-xs text-neutral-400">11:00 AM and 6:00 PM: "fill your tasks"{window.__LN ? "" : " (Android app only)"}</p>
+            </div>
+            <button onClick={() => setData((d) => ({ ...d, remind: d.remind === false }))} role="switch" aria-checked={data.remind !== false} aria-label="Daily reminders"
+              className={`relative h-6 w-11 shrink-0 rounded-full transition ${data.remind !== false ? "bg-red-600" : "bg-neutral-700"}`}>
+              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${data.remind !== false ? "left-5" : "left-0.5"}`} />
+            </button>
+          </div>
           <Card title="Alarms" icon={Bell}>
             <div className="flex gap-2">
               <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-36 shrink-0 rounded-lg border border-neutral-700 bg-black px-2 py-2 text-sm outline-none focus:border-red-500" />
@@ -917,6 +967,22 @@ export default function LifeArc() {
             <p className="mt-3 text-xs text-neutral-500">In the browser, alarms ring while this page is open. The Android app schedules them in the background with your tune.</p>
           </Card>
           </>
+        )}
+        {needSetup && !bk && S.configured() && (
+          <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/90 p-4 sm:items-center">
+            <div className="w-full max-w-sm rounded-2xl border border-neutral-700 bg-neutral-950 p-5">
+              <p className="text-base font-semibold text-neutral-100">Reinstalled the app?</p>
+              <p className="mt-1 text-xs text-neutral-400">Enter your phone number and PIN to bring your data back. No OTP. New here? Choose a 6-digit PIN and tap Start to turn on auto backup.</p>
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" value={P.phone.replace(/\D/g, "").slice(0, 10)} placeholder="10-digit mobile number" onChange={(e) => setProf({ phone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                className="mt-3 w-full rounded-lg border border-neutral-700 bg-black px-3 py-2.5 text-sm outline-none focus:border-red-500" />
+              <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={6} value={bkPin} placeholder="6-digit PIN" onChange={(e) => setBkPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                className="mt-2 w-full rounded-lg border border-neutral-700 bg-black px-3 py-2.5 text-sm outline-none focus:border-red-500" />
+              {bkMsg && <p className="mt-2 text-xs text-red-400">{bkMsg}</p>}
+              <button onClick={bkRestore} disabled={bkBusy} className="mt-3 w-full rounded-xl bg-red-600 py-3 text-sm font-semibold text-white active:bg-red-500 disabled:opacity-50">{bkBusy ? "Please wait..." : "Restore my data"}</button>
+              <button onClick={bkTurnOn} disabled={bkBusy} className="mt-2 w-full rounded-xl border border-red-500 py-2.5 text-sm font-semibold text-red-400 disabled:opacity-50">I'm new: start auto backup</button>
+              <button onClick={skipSetup} className="mt-1 w-full py-2 text-xs text-neutral-500">Skip for now</button>
+            </div>
+          </div>
         )}
         <footer className="pt-4 text-center text-xs text-neutral-500">
           <p>Built by <a href="https://irfan1136.github.io/portfolio11/" target="_blank" rel="noopener noreferrer" className="font-semibold text-red-400 underline underline-offset-2">Mohamed Irfan</a></p>

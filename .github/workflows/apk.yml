@@ -45,6 +45,7 @@ jobs:
           if [ -n "$KS_B64" ]; then
             echo "$KS_B64" | base64 -d > release.jks; PASS="$KS_PASS"
           else
+            echo "::warning::KEYSTORE_B64 secret is missing. This APK gets a random key and will NOT install over the old app (you would lose data). Add the secrets from SIGNING-SECRETS.txt."
             PASS=$(openssl rand -hex 12)
             keytool -genkeypair -keystore release.jks -alias lifearc -keyalg RSA -keysize 2048 -validity 10000 -storepass "$PASS" -keypass "$PASS" -dname "CN=Mohamed Irfan, O=Teclipse, C=IN"
           fi
