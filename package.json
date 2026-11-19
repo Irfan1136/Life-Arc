@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "esbuild src/native.jsx --bundle --loader:.png=dataurl --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=www/app.js && tailwindcss -i src/index.css -o www/app.css --minify",
-    "build:web": "esbuild src/web.jsx --bundle --loader:.png=dataurl --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=site/app.js && tailwindcss -i src/index.css -o site/app.css --minify"
+    "build:web": "esbuild src/web.jsx --bundle --loader:.png=dataurl --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=site/app.js && tailwindcss -i src/index.css -o site/app.css --minify",
+    "build:site": "npm run build:web && cp web/index.html web/robots.txt web/sitemap.xml www/boot.js site/"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.0",
