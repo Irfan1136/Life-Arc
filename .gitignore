@@ -3,3 +3,4 @@ android
 www/app.*
 SIGNING-SECRETS.txt
 *.jks
+site/

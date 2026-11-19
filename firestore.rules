@@ -4,16 +4,23 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
     function linkId(a, b) { return a < b ? a + '_' + b : b + '_' + a; }
+    function text(v, max) { return v is string && v.size() <= max; }
 
     // my own record: my ID and name
     match /users/{uid} {
-      allow read, write: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['code', 'name'])
+        && text(request.resource.data.name, 100);
     }
 
     // ID lookup: anyone signed in can look up ONE id (no listing), only the owner can write
     match /codes/{code} {
       allow get: if signedIn();
-      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow create: if signedIn() && code.matches('^LA-[A-Z0-9]{6}$')
+        && request.resource.data.keys().hasOnly(['uid', 'name'])
+        && request.resource.data.uid == request.auth.uid
+        && text(request.resource.data.name, 100);
       allow update: if signedIn() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid;
     }
 
@@ -22,6 +29,7 @@ service cloud.firestore {
       allow get: if signedIn() && (resource == null || request.auth.uid in resource.data.members);
       allow list: if signedIn() && request.auth.uid in resource.data.members;
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['members','fromUid','toUid','fromName','fromCode','toName','toCode','status','createdAt'])
         && request.resource.data.members.size() == 2
         && request.resource.data.members[0] != request.resource.data.members[1]
         && request.auth.uid in request.resource.data.members
@@ -42,8 +50,8 @@ service cloud.firestore {
     // phone + PIN backup: the document id is a hash of phone and PIN, so only someone who knows both can open it.
     // Single reads only (no listing), no delete, size limited.
     match /backups/{key} {
-      allow get: if signedIn();
-      allow create, update: if signedIn()
+      allow get: if signedIn() && key.matches('^b[0-9a-f]{64}(_prev)?$');
+      allow create, update: if signedIn() && key.matches('^b[0-9a-f]{64}(_prev)?$')
         && request.resource.data.keys().hasOnly(['json', 'updatedAt'])
         && request.resource.data.json is string
         && request.resource.data.json.size() < 900000;
@@ -53,9 +61,10 @@ service cloud.firestore {
     match /progress/{uid} {
       allow read: if signedIn() && (
         request.auth.uid == uid ||
-        get(/databases/$(database)/documents/links/$(linkId(request.auth.uid, uid))).data.status == 'accepted'
+        (exists(/databases/$(database)/documents/links/$(linkId(request.auth.uid, uid)))
+         && get(/databases/$(database)/documents/links/$(linkId(request.auth.uid, uid))).data.status == 'accepted')
       );
-      allow write: if signedIn() && request.auth.uid == uid && request.resource.data.days.size() <= 120;
+      allow write: if signedIn() && request.auth.uid == uid && request.resource.data.days.size() <= 120 && request.resource.data.keys().size() <= 12;
     }
   }
 }

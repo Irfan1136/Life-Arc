@@ -72,3 +72,22 @@ In Track, choose **This week**, **This month** (any past month with the arrows) 
 
 ## Progress filters
 Performance on the Progress tab has **7 days / Month / Season / Overall**. Overall covers every day since your first logged day (weekly averages for the first ~20 weeks, monthly averages after that) and also drives Habit consistency.
+
+## v7 changes (this update)
+- **To-Do tab**: title, requirements, date, time; grouped Overdue / Today / Upcoming / Done; a notification at the due time (Android). Included in the cloud backup. Done tasks older than 30 days are removed and the list is capped at 200 (small storage).
+- **Notifications**: Android's own permission dialog appears when the app opens. The in-app notification card and the "Ring when the app is closed" card are removed from the Alarms tab. Scheduling now re-runs right after permission is granted and never re-prompts.
+- **One-time setup page** after install for "alarm over other apps" and "no battery limit" (`src/Setup.jsx`). It skips itself if both are already allowed.
+- **Loading**: skeleton screen at start and on the Challenge tab; a Reload screen if the app cannot start or crashes (`www/boot.js`).
+- **Many users**: retry timers have random jitter; sign-in calls have a 20 s timeout and 2 retries (`src/resilience.js`); identical Challenge writes are skipped. Firebase scales the servers itself.
+- **Security**: content-security policy in `www/index.html`; stricter `firestore.rules` (publish them again in Firebase > Firestore > Rules); footer no longer links to portfolio11.
+- **Google Play**: the workflow now also builds `LifeArc.aab` (signed with the same key). Listing text, privacy policy, icon, feature graphic and screenshots are in `play-store/`.
+- **Web version + SEO**: `.github/workflows/web.yml` publishes the web build to GitHub Pages (Settings > Pages > Source: GitHub Actions). SEO tags are in `web/index.html`.
+
+### Still needed for Google Play
+- Target SDK is 34 (Capacitor 6). Play will want a newer target, which means upgrading to Capacitor 7 and testing the build.
+- Play account setup: privacy policy URL, Data safety form, content rating, and declarations for exact alarms, full-screen intent and battery optimisation.
+
+### Notes
+- Alarms use `setAlarmClock`, which needs no exact-alarm permission, so the `exact: "granted"` value in the UI code was never a real bug.
+- If notifications are denied twice on Android 13+, Android will not ask again and the app shows nothing; the user must enable them in phone Settings.
+- Cloud backup uses phone + 6-digit PIN. A forgotten PIN cannot be recovered. Turn on Firebase App Check and a budget alert to limit guessing and abuse.

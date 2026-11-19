@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "esbuild src/native.jsx --bundle --loader:.png=dataurl --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=www/app.js && tailwindcss -i src/index.css -o www/app.css --minify"
+    "build": "esbuild src/native.jsx --bundle --loader:.png=dataurl --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=www/app.js && tailwindcss -i src/index.css -o www/app.css --minify",
+    "build:web": "esbuild src/web.jsx --bundle --loader:.png=dataurl --minify --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=site/app.js && tailwindcss -i src/index.css -o site/app.css --minify"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.0",
