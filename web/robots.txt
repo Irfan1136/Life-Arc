@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://irfan1136.github.io/Life-Arc/sitemap.xml
