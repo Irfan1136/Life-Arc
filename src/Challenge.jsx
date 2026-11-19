@@ -48,7 +48,7 @@ export function useChallenge({ name, payload }) {
         (d) => setProg((p) => ({ ...p, [u]: d })),
         // The listener dies on any error (often "permission-denied" right after accepting, before the server has the accept).
         // Drop it and subscribe again a few seconds later, otherwise the friend's % never shows.
-        () => { delete subs.current[u]; setTimeout(() => setAgain((x) => x + 1), 4000); },
+        () => { delete subs.current[u]; setTimeout(() => setAgain((x) => x + 1), 4000 + Math.random() * 4000); },
       );
     });
     Object.keys(subs.current).forEach((u) => {
@@ -62,7 +62,7 @@ export function useChallenge({ name, payload }) {
     let t;
     const go = () => S.pushProgress({ name: name || "Friend", code: me.code, ...payload })
       .then(() => setPushErr(""))
-      .catch((e) => { setPushErr(S.msg(e)); t = setTimeout(go, 15000); }); // never fail silently: show why and retry
+      .catch((e) => { setPushErr(S.msg(e)); t = setTimeout(go, 15000 + Math.random() * 10000); }); // never fail silently: show why and retry
     t = setTimeout(go, 1500);
     return () => clearTimeout(t);
   }, [st, payload, name]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -215,7 +215,7 @@ export function ChallengeTab({ ch, name, setName, periods, today, payload, seaso
         <Box title="Challenge" icon={Users}>
           {ch.st === "error"
             ? (<><p className="text-sm text-red-400">{ch.msg}</p><button onClick={ch.retry} className={`mt-3 w-full ${btn}`}>Try again</button></>)
-            : <p className="text-sm text-neutral-400">Connecting...</p>}
+            : <div role="status" aria-busy="true" aria-label="Loading challenge"><div className="la-sk mb-3 h-4 w-1/2" /><div className="la-sk mb-2 h-11" /><div className="la-sk mb-2 h-11" /><div className="la-sk h-11" /></div>}
         </Box>
       </>
     );

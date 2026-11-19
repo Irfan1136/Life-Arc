@@ -95,12 +95,21 @@ export async function start(name) {
   return { uid, code };
 }
 
+let lastName = "", lastProg = ""; // skip writes that would not change anything (fewer server calls)
 export const updateName = async (code, name) => {
+  const k = `${uid}|${code}|${name}`;
+  if (k === lastName) return;
   await setDoc(doc(db, "codes", code), { uid, name });
   await setDoc(doc(db, "users", uid), { code, name });
+  lastName = k;
 };
 
-export const pushProgress = (p) => setDoc(doc(db, "progress", uid), { ...p, updatedAt: serverTimestamp() });
+export const pushProgress = async (p) => {
+  const k = uid + JSON.stringify(p);
+  if (k === lastProg) return;
+  await setDoc(doc(db, "progress", uid), { ...p, updatedAt: serverTimestamp() });
+  lastProg = k;
+};
 
 export function watchLinks(cb) {
   const q = query(collection(db, "links"), where("members", "array-contains", uid));

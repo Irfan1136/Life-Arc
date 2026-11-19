@@ -1,3 +1,4 @@
+import "./resilience.js";
 import { createRoot } from "react-dom/client";
 import LifeArc from "./LifeArc.jsx";
 import Splash from "./Splash.jsx";

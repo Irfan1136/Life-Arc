@@ -3,3 +3,9 @@
 @tailwind utilities;
 body{margin:0;background:#000;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 :root{color-scheme:dark}
+.la-sk{border-radius:12px;background:linear-gradient(90deg,#141414 25%,#262626 50%,#141414 75%);background-size:200% 100%;animation:la-sh 1.3s ease-in-out infinite}
+@keyframes la-sh{to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.la-sk{animation:none}}
+.boot-sk{max-width:576px;margin:0 auto;padding:max(16px,env(safe-area-inset-top)) 16px;display:flex;flex-direction:column;gap:14px;min-height:100vh;background:#000}
+#la-recover{position:fixed;inset:0;z-index:100000;background:#000;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:#e5e5e5;font-family:system-ui,sans-serif}
+#la-recover h2{color:#ef4444;margin:0 0 8px}#la-recover p{color:#a3a3a3;margin:0 0 16px}#la-recover button{background:#dc2626;color:#fff;border:0;border-radius:12px;padding:12px 28px;font-weight:600}

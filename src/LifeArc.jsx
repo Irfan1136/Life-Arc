@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Moon, Brain, Dumbbell, Droplets, Apple, BookOpen, Smartphone, Snowflake, Pencil, ClipboardCheck,
-  Flame, CalendarDays, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users, ChevronLeft, ChevronRight,
+  Flame, CalendarDays, Bell, BellRing, Trash2, Plus, Volume2, X, Target, Check, TrendingUp, ChevronUp, ChevronDown, Quote, Minus, Play, Activity, Music, User, Flower2, Sun, Leaf, Users, ChevronLeft, ChevronRight, ListChecks,
 } from "lucide-react";
 import { useChallenge, ChallengeTab, InviteAlert } from "./Challenge.jsx";
 import * as S from "./social.js";
 import logo from "./logo.png";
 import * as store from "./store.js";
+import { TodoTab, todoNotifications, pruneTodos } from "./Todo.jsx";
+import { PermissionSetup } from "./Setup.jsx";
 
 const KEY = "winterArc:v1";
 const EDIT_BACK = 3; // today + the previous 3 days can be edited; older days are locked
 const SETKEY = "la:setup";
+const PERMKEY = "la:perm1"; // one-time phone-settings page shown
+
 const WIN_PCT = 70; // a day is won at 70% of your habits
 const MONTH_GOAL = 0.8; // win 80% of the days in each month
 
@@ -34,7 +38,7 @@ const QUOTES = [
   "Discipline is a promise to yourself, kept quietly.",
   "Tired is temporary. Regret is not.",
 ];
-const TABS = [["today", "Today", Check], ["progress", "Progress", TrendingUp], ["track", "Track", Activity], ["challenge", "Challenge", Users], ["alarms", "Alarms", Bell]];
+const TABS = [["today", "Today", Check], ["todo", "To-Do", ListChecks], ["progress", "Progress", TrendingUp], ["track", "Track", Activity], ["challenge", "Challenge", Users], ["alarms", "Alarms", Bell]];
 const TUNES = [
   { id: "chime", name: "Soft chime" }, { id: "beep", name: "Digital beep" }, { id: "siren", name: "Siren" },
   { id: "rise", name: "Rising melody" }, { id: "pulse", name: "Pulse" },
@@ -88,8 +92,9 @@ function load() {
       goals: r?.goals || {}, pct: r?.pct || {}, hv: Array.isArray(r?.hv) ? r.hv : [], remind: r?.remind !== false, rings: okRings(r?.rings), profile: r?.profile || { name: "", dob: "", phone: "" },
       trackers: withSleep(Array.isArray(r?.trackers) ? r.trackers : [{ ...SCREEN, target: r?.screenLimit ?? 3 }]),
       tracks: r?.tracks || (r?.screen ? { screen: r.screen } : {}),
+      todos: pruneTodos(r?.todos),
     };
-  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, pct: {}, hv: [], remind: true, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {} }; }
+  } catch { return { logs: {}, sleep: {}, alarms: [], habits: DEFAULT_HABITS, goals: {}, pct: {}, hv: [], remind: true, rings: [], profile: { name: "", dob: "", phone: "" }, trackers: [SLEEP, SCREEN], tracks: {}, todos: [] }; }
 }
 
 const PKG = "com.teclipse.lifearc";
@@ -234,6 +239,8 @@ export default function LifeArc() {
   const [bkFail, setBkFail] = useState("");
   // the restore sheet opens only on a fresh install (no data, no backup set up, not skipped before)
   const [needSetup, setNeedSetup] = useState(() => { try { return !store.get(SETKEY) && !store.get(BKKEY) && Object.keys(load().logs).length === 0; } catch { return false; } });
+  const [permSetup, setPermSetup] = useState(() => { try { return !!window.__AL && !store.get(PERMKEY); } catch { return false; } });
+  const finishPerm = () => { try { store.set(PERMKEY, "1"); } catch { /* ignore */ } setPermSetup(false); };
   const skipSetup = () => { try { store.set(SETKEY, "1"); } catch { /* ignore */ } setNeedSetup(false); setBkMsg(""); };
 
   const today = dk(now);
@@ -304,6 +311,7 @@ export default function LifeArc() {
     document.addEventListener("visibilitychange", v);
     return () => document.removeEventListener("visibilitychange", v);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (permSetup && fs && rel.battery === true) finishPerm(); }, [permSetup, fs, rel]); // eslint-disable-line react-hooks/exhaustive-deps
   // Android: hand the alarm list to the phone's own alarm engine. It rings over other apps and the lock screen
   // with Snooze and Stop, even when the app is closed, and books itself again after a restart.
   useEffect(() => {
@@ -322,8 +330,8 @@ export default function LifeArc() {
     if (!LN) return;
     (async () => {
       try {
-        const perm = await LN.requestPermissions();
-        if (perm.display !== "granted") return;
+        const pr = await LN.checkPermissions(); // the system dialog is asked once when the app opens
+        if (pr.display !== "granted") return;
         for (const t of TUNES) { try { await LN.deleteChannel({ id: `alarm_${t.id}` }); } catch { /* none */ } }
         const pend = await LN.getPending();
         if (pend.notifications.length) await LN.cancel({ notifications: pend.notifications });
@@ -348,10 +356,12 @@ export default function LifeArc() {
           [[11, "Morning check-in: fill your tasks for today."], [18, "Evening check-in: fill your tasks before the day ends."]].forEach(([hr, body], i) =>
             list.push({ id: 2000000001 + i, title: "Life Arc", body, channelId: "reminders", schedule: { on: { hour: hr, minute: 0 }, allowWhileIdle: true } }));
         }
+        try { await LN.createChannel({ id: "todos", name: "To-Do reminders", description: "Reminds you when a task is due", importance: 4, vibration: true }); } catch { /* default channel */ }
+        list.push(...todoNotifications(data.todos));
         if (list.length) await LN.schedule({ notifications: list });
       } catch { /* notifications unavailable */ }
     })();
-  }, [data.alarms, data.remind]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data.alarms, data.remind, data.todos, perm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -1065,19 +1075,10 @@ export default function LifeArc() {
 
         {tab === "challenge" && <ChallengeTab ch={ch} name={P.name} setName={(v) => setProf({ name: v })} periods={periods} today={today} payload={syncPayload} seasonName={SE.name} />}
 
+        {tab === "todo" && <TodoTab todos={data.todos || []} setTodos={(fn) => setData((d) => ({ ...d, todos: fn(d.todos || []) }))} today={today} />}
+
         {tab === "alarms" && (
           <>
-          <div className={`rounded-2xl p-4 ${perm === "granted" ? "bg-neutral-900/60" : "bg-red-950/40"}`}>
-            {perm === "granted" && <p className="flex items-center gap-2 text-sm text-emerald-400"><Check size={16} /> Notifications allowed</p>}
-            {(perm === "prompt" || perm === "unknown") && (
-              <>
-                <p className="text-sm text-neutral-200">Allow notifications so alarms can alert you when the app is closed.</p>
-                <button onClick={askPerm} className="mt-3 w-full rounded-xl bg-red-600 py-3 font-semibold text-white active:bg-red-500">Allow notifications</button>
-              </>
-            )}
-            {perm === "denied" && <p className="text-sm text-neutral-200">Notifications are blocked. Turn them on in your phone's Settings, Apps, Life Arc, Notifications.</p>}
-            {perm === "unsupported" && <p className="text-sm text-neutral-400">This browser can't show notifications. Alarms ring while this page is open.</p>}
-          </div>
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
             <div>
               <p className="text-sm font-semibold text-neutral-200">Daily reminders</p>
@@ -1088,26 +1089,6 @@ export default function LifeArc() {
               <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${data.remind !== false ? "left-5" : "left-0.5"}`} />
             </button>
           </div>
-          {window.__LN && (
-            <Card title="Ring when the app is closed" icon={BellRing}>
-              <p className="text-xs text-neutral-400">Some phones stop apps in the background. Turn these on once so alarms and the 11:00 / 6:00 reminders come on time.</p>
-              <ul className="mt-3 space-y-2 text-sm">
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-neutral-200">Alarm over other apps: <span className={fs ? "text-emerald-400" : "text-amber-400"}>{fs ? "allowed" : "not allowed"}</span></span>
-                  {!fs && <button onClick={() => window.__AL.openFullScreenSettings().catch(() => {})} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Allow</button>}
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-neutral-200">Battery limit: <span className={rel.battery === false ? "text-amber-400" : "text-emerald-400"}>{rel.battery === false ? "on (may stop alarms)" : "off"}</span></span>
-                  {rel.battery === false && <button onClick={() => window.__RP.batteryAllow().catch(() => {})} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Turn off</button>}
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-neutral-200">Auto-start / background</span>
-                  <button onClick={() => window.__RP.openAutostart().catch(() => {})} className="rounded-lg border border-red-500 px-3 py-1.5 text-xs font-semibold text-red-400">Open</button>
-                </li>
-              </ul>
-              <p className="mt-2 text-xs text-neutral-500">In that screen: allow Auto-start for Life Arc, set Battery to "No restrictions", and lock Life Arc in Recent apps (long-press its card, then Lock).</p>
-            </Card>
-          )}
           <Card title="Alarms" icon={Bell}>
             <div className="flex gap-2">
               <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-36 shrink-0 rounded-lg border border-neutral-700 bg-black px-2 py-2 text-sm outline-none focus:border-red-500" />
@@ -1181,7 +1162,7 @@ export default function LifeArc() {
           </div>
         )}
         <footer className="pt-4 text-center text-xs text-neutral-500">
-          <p>Built by <a href="https://irfan1136.github.io/portfolio11/" target="_blank" rel="noopener noreferrer" className="font-semibold text-red-400 underline underline-offset-2">Mohamed Irfan</a></p>
+          <p>Built by <span className="font-semibold text-red-400">Mohamed Irfan</span></p>
           <p className="mt-1">© {now.getFullYear()} Mohamed Irfan. All rights reserved.</p>
         </footer>
       </div>
@@ -1195,6 +1176,8 @@ export default function LifeArc() {
           ))}
         </div>
       </nav>
+
+      {permSetup && !needSetup && <PermissionSetup fs={fs} battery={rel.battery} onDone={finishPerm} />}
 
       {profOpen && (
         <div className="fixed inset-0 z-50 flex items-end bg-black/80" onClick={() => setProfOpen(false)}>

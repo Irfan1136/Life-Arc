@@ -1,3 +1,4 @@
+import "./resilience.js";
 import { createRoot } from "react-dom/client";
 import { registerPlugin } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
